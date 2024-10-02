@@ -66,3 +66,83 @@ def maximum (n k : Nat) : Nat :=
 
 #check maximum 3
 #check String.append "Hello "
+
+def joinStringsWith (s1 s2 s3 : String) : String := String.append s2 (String.append s1 s3)
+
+#eval joinStringsWith ", " "one" "and another"
+
+#check joinStringsWith ": "
+
+def volume (x y z : Nat) := x * y * z
+
+#eval volume 3 4 5
+#eval volume 3 3 3
+#check volume 1 1
+
+
+def Str : Type := String
+
+def aStr : Str := "Yet another string."
+
+
+def NaturalNumber : Type := Nat
+
+def fortyTwo_bad : NaturalNumber := 42
+
+def fortyTwo : NaturalNumber := (42 : Nat)
+
+abbrev N : Type := Nat
+
+def thirtyNine : N := 39
+
+-- Section 1.4
+
+#check 0
+
+#check (0 : Float)
+
+structure Point where
+  x : Float
+  y : Float
+deriving Repr
+
+def origin : Point := {x := 0.0, y := 0.0}
+
+#eval origin
+#eval origin.x
+#eval origin.y
+
+def addPoints (p1 p2 : Point) : Point :=
+  { x := p1.x + p2.x, y := p1.y + p2.y }
+
+def distance (p1 p2 : Point) : Float :=
+  Float.sqrt (((p2.x - p1.x) ^ 2.0) + ((p2.y - p1.y) ^ 2.0))
+
+#eval distance origin (addPoints { x := 1.5, y := 32 } { x := -8, y := 0.2 })
+
+#eval distance { x := 1.0 , y := 2.0 } { x := 5.0 , y := -1.0 }
+
+
+structure Point3D where
+  x : Float
+  y : Float
+  z : Float
+deriving Repr
+
+-- The structure's expected type must be known in order to use the curly-brace syntax
+def origin3D : Point3D := { x := 0.0 , y := 0.0 , z := 0.0 }
+
+#check ({ x := 0.0, y := 0.0 } : Point)
+#check { x := 0.0, y := 0.0  : Point}
+
+
+def zeroX_long (p : Point) : Point :=
+  { x := 0, y := p.y }
+
+def zeroX (p : Point) : Point :=
+  { p with x := 0 }
+
+def zeroXY3D (p : Point3D) :=
+  { p with x := 0, y := 0 }
+
+-- Continue from "Behind the Scenes"
