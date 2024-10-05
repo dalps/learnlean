@@ -351,7 +351,7 @@ def length (α : Type) (l : List α) :=
 def ireplace {α : Type} (point : PPoint α) (newX : α) :=
   { point with x := newX }
 
-#eval replaceX_imp natOrigin 5
+#eval ireplace natOrigin 5
 
 def ilength {α : Type} (xs : List α) :=
   match xs with
@@ -516,3 +516,181 @@ def boolPairOfSum {α : Type} (sum : α ⊕ α) : Bool × α :=
   match sum with
   | Sum.inl a => (true, a)
   | Sum.inr a => (false, a)
+
+-- Section 1.7
+
+-- You can leave out the implicit type argument
+def length' (xs : List α) : Nat :=
+  match xs with
+  | [] => 0
+  | _ :: ys => Nat.succ (length' ys)
+
+-- Pattern-Matching definitions
+def length'' : List α -> Nat
+  | [] => 0
+  | y :: ys => Nat.succ (length'' ys)
+
+def drop : Nat -> List α -> List α
+  | 0, xs               => xs
+  | Nat.succ _, []      => []
+  | Nat.succ n, _ :: xs => drop n xs
+
+/- ^ is sugar for a match expression with simultaneous matching:
+
+def drop (n : Nat) (xs : List α) : List α :=
+  match n, xs with
+  | Nat.zero, ys => ys
+  | _, [] => []
+  | Nat.succ n , y :: ys => drop n ys
+-/
+
+#eval drop 2 primesUnder10
+
+def fromOption (default : α) : Option α -> α
+  | none => default
+  | some a => a
+
+#eval (some "watermelon").getD "🍉"
+#eval (some "西瓜").getD "🍉"
+#eval none.getD "🍉"
+
+-- Wasteful: O(2ⁿ) cons
+def unzip'' : List (α × β) -> (List α × List β)
+  | [] => ([],[])
+  | (a,b) :: abs => (a :: (unzip'' abs).fst, b :: (unzip'' abs).snd)
+
+-- Using a local definition: O(2n) cons
+def unzip' : List (α × β) -> (List α × List β)
+  | [] => ([],[])
+  | (a,b) :: abs =>
+      let u := unzip' abs -- newline separates let-expr and let-body (or [;] for single line)
+      (a :: u.fst, b :: u.snd) -- it's a syntax error to indent the body further inward than the [let] keyword
+
+-- Using a local definition + pattern matching
+def unzip : List (α × β) -> (List α × List β)
+  | [] => ([],[])
+  | (a,b) :: abs =>
+      let (as, bs) := unzip abs; (a :: as, b :: bs)
+
+-- Like in OCaml, recursive [let] definition require the [rec] keyword
+def reverse (xs : List α) : List α :=
+  let rec helper acc : List α -> List α
+    | [] => acc
+    | y :: ys => helper (y :: acc) ys
+  helper [] xs
+
+#eval reverse primesUnder10
+
+
+-- Omitting the return type of [unzip] is possible when using an explicit [match] expression. Omitting the argument type leads to an error.
+def unzip''' (pairs : List (α × β)) :=
+  match pairs with
+  | [] => ([], [])
+  | (x,y) :: xys =>
+    let unzipped := unzip''' xys
+    (x :: unzipped.fst, y :: unzipped.snd)
+
+def even' : Nat -> Bool
+  | 0 => true
+  | n + 1 => ¬even n
+
+def halve' : Nat -> Nat
+  | 0 => 0
+  | n + 2 => halve' n + 1
+  | n + 1 => halve' n
+
+def halve : Nat -> Nat
+  | 0 => 0
+  | 1 => 0
+  | n + 2 => halve n + 1
+
+#eval halve' 24
+#eval halve 7
+
+#check fun x => x -- Note the metavariables
+#check fun (x : α) => x -- Wrong
+-- Must provide a type argument for defining the identity
+#check fun (α : Type) => fun (x : α) => x
+#check fun {α : Type} => fun (x : α) => x
+#check fun {α : Type} (x : α) => x -- curried
+#check fun x => x + 1
+#check fun (x : Int) => x + 1
+#check λ x => x + 1
+#check λ
+      | 0 => none
+      | n + 1 => some n
+
+def double : Nat -> Nat
+  | 0 => 0
+  | n + 1 => double n + 2
+
+#eval double 12
+
+def double' : Nat -> Nat := fun
+  | 0 => 0
+  | n + 1 => double n + 2
+
+-- Centered dot notation
+#eval primesUnder10.map (. + 1)
+#eval primesUnder10.map (double · + 2)
+
+-- The centered dot always creates a function out of the _closest_ surrounding set of parentheses. Watch:
+#check (· + 5, 3)
+#check ((· + 5), 3)
+#check (· , ·) 1 2
+
+#eval (· + ·) 2 2
+#eval (. * 2) 5
+
+
+def Nat.double : Nat -> Nat := (· * 2)
+#eval (4).double
+#eval (4 : Nat).double
+
+namespace Uple
+def triple (x : Nat) := x * 3
+def quadruple (x : Nat) := x * 4
+end Uple
+
+-- Locally-scoped [open]
+def dodecaUple x :=
+  open Uple in
+  x |> triple |> quadruple
+
+-- Command-scoped [open]
+open Uple in
+#check quadruple
+
+-- Following commands still need qualification
+#check triple
+
+-- Top-level [open]
+open Uple
+
+#check quadruple
+#check triple
+
+inductive Inline : Type where
+  | lineBreak
+  | string : String → Inline
+  | emph : Inline → Inline
+  | strong : Inline → Inline
+
+-- Interested in a single constructor
+def Inline.getString? : Inline -> Option String
+  | string str => some str
+  | _ => none
+
+-- Pattern-matching with [if let]
+def Inline.getString'? (inline : Inline) : Option String :=
+  if let Inline.string s := inline then
+    some s
+  else none -- fallback
+
+#eval ⟨1,2⟩ -- Type not obvious from the context
+#eval (⟨1,2⟩ : Point)
+#eval replaceX Nat ⟨1,2⟩ 3
+
+
+#eval s!"three fours is {triple 4}"
+#eval s!"three fours is {triple}"
