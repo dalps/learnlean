@@ -331,3 +331,188 @@ def posOrNegTwo (s : Sign) :
 
 #eval posOrNegTwo Sign.neg
 #check posOrNegTwo Sign.pos
+
+-- Lists
+
+def primesUnder10 := [2, 3, 5, 7]
+
+def explicitPrimesUnder10 : List Nat :=
+  List.cons 2 (List.cons 3 (List.cons 5 (List.cons 7 List.nil)))
+
+#eval explicitPrimesUnder10
+
+def length (α : Type) (l : List α) :=
+  match l with
+  | List.nil => 0
+  | List.cons _ l' => length α l' + 1
+
+-- Implicit Arguments
+
+def ireplace {α : Type} (point : PPoint α) (newX : α) :=
+  { point with x := newX }
+
+#eval replaceX_imp natOrigin 5
+
+def ilength {α : Type} (xs : List α) :=
+  match xs with
+  | [] => Nat.zero
+  | _ :: ys => Nat.succ (ilength ys)
+
+#eval ilength explicitPrimesUnder10
+#eval explicitPrimesUnder10.length  -- stardard library's [length]
+
+#check List.length (α := Int)
+
+inductive Option' (α : Type) : Type where
+  | none : Option' α
+  | some (v : value) : Option' α
+
+#eval List.head? ([] : List Nat)
+#eval primesUnder10.head?
+#eval [].headD 42 -- Default value helps infer α
+#eval ([] : List Int).head? -- Type annotation
+#eval [].head? (α := Int) -- Define α explicitly
+
+#eval [].head?
+
+def fives' : String × Int := { fst := "five", snd := 5 }
+
+def fives := ("five", 5)
+
+def sevens' : String × Int × Nat := ("VII", (7, 4 + 3))
+
+-- Pairs are right associative: tuples are nested products behind the scenes.
+def sevens : String × Int × Nat := ("VII", 7, 4 + 3)
+
+#eval fives.fst
+#eval sevens.snd.snd
+
+-- Better off defining a custom inductive datatype: dog names + cat names
+def PetName : Type := String ⊕ String
+
+def animals : List PetName :=
+  [Sum.inl "Scooby", Sum.inr "Floppa", Sum.inr "Ray", Sum.inl "Billo", Sum.inr "Scratchy"]
+
+def howManyDogs (pets : List PetName) :=
+  List.filter (fun (p : PetName) =>
+    match p with | Sum.inl _ => true
+                 | Sum.inr _ => false) pets
+  |> List.length
+
+#eval howManyDogs animals
+
+inductive ArithExpr (ann : Type) : Type :=
+  | int : ann -> Int -> ArithExpr ann
+  | plus : ann -> ArithExpr ann -> ArithExpr ann -> ArithExpr ann
+  | minus : ann -> ArithExpr ann -> ArithExpr ann -> ArithExpr ann
+  | times : ann -> ArithExpr ann -> ArithExpr ann -> ArithExpr ann
+
+def noAnns := ArithExpr Unit
+
+#check Unit.unit
+#check ()
+#check ArithExpr.int () (-2)
+#check (ArithExpr.plus () (ArithExpr.int () (-2)) (ArithExpr.int () (-2)) : noAnns)
+
+def left? {α : Type} (s : Sum α Empty) : Option α := s.getLeft?
+
+#check Sum.inl true (β := Empty)
+#eval left? (Sum.inl true)
+
+/-
+inductive MyType : Type where
+  | ctor : (α : Type) → α → MyType
+
+inductive MyType : Type where
+  | ctor : (MyType → Int) → MyType
+
+inductive MyType (α : Type) : Type where
+  | ctor : α → MyType
+
+inductive MyType (α : Type) : Type where
+  | ctor : α → MyType α
+
+def ofFive : MyType := ctor 5
+-/
+
+def List.last {α : Type} (xs : List α) : Option α :=
+  match xs with
+  | [] => none
+  | [x] => x
+  | _::ys => last ys
+
+#eval primesUnder10.last
+
+def List.findFirst? {α : Type} (xs : List α) (predicate : α -> Bool) :=
+  match xs with
+  | [] => none
+  | y :: ys => if predicate y then some y
+                              else ys.findFirst? predicate
+
+#eval primesUnder10.findFirst? (fun x => even x)
+
+def Prod.swap {α β : Type} (pair : α × β) : β × α :=
+  (pair.snd, pair.fst)
+
+#eval fives
+#eval fives.swap
+
+inductive PetName' : Type :=
+  | DogName : String -> PetName'
+  | CatName : String -> PetName'
+
+def animals' : List PetName' := [
+  PetName'.DogName "Scooby",
+  PetName'.CatName "Floppa",
+  PetName'.CatName "Ray",
+  PetName'.DogName "Billo",
+  PetName'.CatName "Scratchy"
+]
+
+def howManyDogs' (pets : List PetName') : Nat :=
+  match pets with
+  | [] => 0
+  | PetName'.DogName _ :: ps => howManyDogs' ps + 1
+  | PetName'.CatName _ :: ps => howManyDogs' ps
+
+
+def zip {α β : Type} (as : List α) (bs : List β) : List (α × β) :=
+  match as,bs with
+  | [],_ | _,[] => []
+  | a :: as', b :: bs' => (a,b) :: zip as' bs'
+
+def primesWithPets := zip primesUnder10 animals
+
+#eval primesWithPets
+#check primesWithPets
+
+def take {α : Type} (n : Nat) (xs : List α) : List α :=
+  match n with
+  | 0 => []
+  | Nat.succ m => match xs with
+                  | [] => []
+                  | y :: ys' => y :: take m ys'
+
+#eval take 0 animals
+#eval take 2 animals
+#eval take 8 animals
+
+def distr {α β γ : Type} (pair : α × (β ⊕ γ)) : (α × β) ⊕ (α × γ) :=
+  match pair.snd with
+  | Sum.inl b => Sum.inl (pair.fst, b)
+  | Sum.inr c => Sum.inr (pair.fst, c)
+
+#eval primesWithPets |> List.map distr
+
+-- [Bool × α] and [α ⊕ α] have the same cardinality
+def sumOfBoolPair {α : Type} (pair : Bool × α) : α ⊕ α :=
+  if pair.fst then Sum.inl pair.snd else Sum.inr pair.snd
+
+#eval sumOfBoolPair (true, 1)
+#eval sumOfBoolPair (false, 1)
+
+-- Let's complete the bijection
+def boolPairOfSum {α : Type} (sum : α ⊕ α) : Bool × α :=
+  match sum with
+  | Sum.inl a => (true, a)
+  | Sum.inr a => (false, a)
