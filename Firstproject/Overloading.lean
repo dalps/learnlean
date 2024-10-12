@@ -406,6 +406,101 @@ def four : Even := 4
 #eval four + 18
 #eval four * 102
 #eval (254 : Even)
-#eval (256 : Even) -- the search limit seems to be around [128]
+#eval (256 : Even) -- the search limit seems to be around 128
 
 end Exercise4
+
+def addNatPos : Nat → Pos → Pos
+  | 0, p => p
+  | n + 1, p => (addNatPos n p).succ
+
+def addPosNat : Pos → Nat → Pos
+  | p, 0 => p
+  | p, n + 1 => (addPosNat p n).succ
+
+#eval addNatPos 9 9
+#eval addPosNat 18 0
+
+#check @Add.add
+#check @HAdd.hAdd
+
+instance : HAdd Nat Pos Pos where
+  hAdd := addNatPos
+
+instance : HAdd Pos Nat Pos where
+  hAdd := addPosNat
+
+#eval (7 : Nat) + seven
+#eval seven + (7 : Nat)
+#eval (3 : Pos) + (5 : Nat)
+
+namespace UselessHPlus
+
+class HPlus (α : Type) (β : Type) (γ : Type) where
+  hPlus : α → β → γ
+
+instance : HPlus Nat Pos Pos where
+  hPlus := addNatPos
+
+instance : HPlus Pos Nat Pos where
+  hPlus := addPosNat
+
+#eval HPlus.hPlus seven (7 : Nat) -- typechecker panics: "typeclass instance problem is stuck"
+
+#eval HPlus.hPlus (7 : Nat) (3 : Pos)
+
+-- The typechecker needs more hand-holding
+#eval (HPlus.hPlus (7 : Nat) (3 : Pos) : Pos)
+#eval (HPlus.hPlus (7 : Pos) (3 : Nat) : Pos)
+
+end UselessHPlus
+
+/- Having to specify the return type of addition defeats the purpose of overloading. [HPlus] is too weak. -/
+
+/- The trick is to instruct the instance search
+  algorithm to start the search without knowing [γ] in advance (i.e. leave it as a metavariable), and try to discover it in the process. This is possible by marking its type as [outParam].
+-/
+
+-- This is how Lean's [HAdd] is defined
+class HPlus (α : Type) (β : Type) (γ : outParam Type) where
+  hPlus : α → β → γ
+
+instance : HPlus Nat Pos Pos where
+  hPlus := addNatPos
+
+instance : HPlus Pos Nat Pos where
+  hPlus := addPosNat
+
+#eval HPlus.hPlus (7 : Nat) (3 : Pos)
+#eval HPlus.hPlus (7 : Pos) (3 : Nat)
+
+-- Default instances
+
+instance [Add α] : HPlus α α α where
+  hPlus := Add.add
+
+-- Now [hPlus] can be used for any addable type
+#eval HPlus.hPlus (3 : Nat) (5 : Nat)
+#check HPlus.hPlus (3 : Nat) (5 : Nat)
+
+-- Type class search occurs even when some inputs are unknown
+#check HPlus.hPlus (3 : Nat) -- note the metavariables: the search algorithm started, and it is waiting for more information
+
+@[default_instance]
+instance [Add α] : HPlus α α α where
+  hPlus := Add.add
+
+-- [@[default_instance]] instructs the search algorithm to fill out the holes with the information provided by the type-homogenous instance.
+
+#check HPlus.hPlus (5 : Nat) -- [Nat -> Nat]: the default instance was selected
+
+#check 5 -- [Nat]: this judgment is also due to the instance of [OfNat] for [Nat] being marked as the default one
+
+namespace Exercise5
+
+instance [Mul α] : HMul (PPoint α) α (PPoint α) where
+  hMul p n:= { x := p.x * n, y := p.y * n }
+
+#eval {x := 2.5, y := 3.7 : PPoint Float} * 2.0
+
+end Exercise5
