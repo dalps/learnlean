@@ -320,4 +320,92 @@ instance : Server (HTTPMethod.post body) where
 #eval Server.reply HTTPMethod.get
 #eval Server.reply (HTTPMethod.post "hello world")
 
+-- Still not convinced this is what they're asking
+
+-- "Use a type class to associate different IO actions with each HTTP method"
+
+class Client (α : Type) where
+  send : IO α -> HTTPMethod
+
 end Exercise3
+
+-- [IO.println] prints any value whose type there is an instance of [ToString]
+#eval IO.println "foo"
+#eval IO.println (some "foo")
+#eval IO.println 3
+#eval IO.println true
+
+#check IO.println
+#check @IO.println
+
+-- ## Instance Implicits
+
+def List.sum [Add α] [OfNat α 0] : List α -> α
+  | [] => 0
+  | x :: xs => x + xs.sum
+
+def fourNats : List Nat := [2, 3, 5, 7]
+
+#eval fourNats.sum
+
+def fourPos : List Pos := [2, 3, 5, 7]
+
+#eval fourPos.sum -- error
+
+/- Key points
+  1. A type class defines a structure that has a field for each overloaded operation. Instances are values of that structure type. Values of the fields contain the impementation for the instance.
+  2. A function definition can include instance implicits, which add constraints on implicit polymorphic type arguments (see [List.sum] example)
+  3. At call site, the strategy Lean uses to discover implicit instances is different from that of implicit arguments. While the latter are determined through unification, for instance implicit Lean consults a built-in table of instance values
+  4. Instances may also take instance implicits arguments (see [PPoint.sum] example)
+  5. A recursive instance search results in a structure value that has a reference to another structure value. For example, the instance value of [Add (PPoint Nat)] carries a reference to [Add Nat].
+ -/
+
+structure PPoint (α : Type) where
+  x : α
+  y : α
+deriving Repr
+
+/- The colon [:] separate the instance's arguments
+   from the return type -/
+instance [Add α] : Add (PPoint α) where
+  add p1 p2 := { x := p1.x + p2.x, y := p1.y + p2.y }
+
+/- Recall the definition of the type class [OfNat]:
+
+  class OfNat (α : Type) (_ : Nat) where
+    ofNat : α
+-/
+#check OfNat
+#check @OfNat
+#check OfNat.ofNat
+#check @OfNat.ofNat -- note the explicit [Nat] argument [n]. It wasn't part of the user signature of the method, it was introduces by Lean to help itself figure out the instance value
+
+/-
+  Just as accessor methods of ordinary structure types take a value of the structure type as argument, type class instance methods take an instance implicit as argument (often called [self]).
+-/
+#check @Add.add
+
+namespace Exercise4
+-- ~10 min
+
+open Exercise2
+
+instance : OfNat Even Nat.zero where
+  ofNat := ⟨0⟩
+
+-- It isn't as simple as (n * 2)
+instance [OfNat Even n] : OfNat Even (n + 2) where
+  ofNat := ⟨(n + 2) / 2⟩
+
+def four : Even := 4
+
+#eval four
+#eval (254 : Even)
+#eval (3 : Even)
+#eval (42 : Even)
+#eval four + 18
+#eval four * 102
+#eval (254 : Even)
+#eval (256 : Even) -- the search limit seems to be around [128]
+
+end Exercise4
