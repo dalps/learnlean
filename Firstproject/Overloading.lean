@@ -175,3 +175,149 @@ instance : OfNat Pos (n + 1) where
 
 def eight : Pos := 8
 -- def zero : Pos := 0
+
+-- # Exercises
+
+namespace Exercise1
+-- ~20 min
+
+structure Pos where
+  succ :: -- constructor's name, overrides [mk]
+  pred : Nat
+deriving Repr
+
+#check Pos.succ
+#check Pos.succ 1
+
+instance : OfNat Pos (n + 1) where
+  ofNat := ⟨n⟩
+
+    /- You're dumb
+
+    let rec natPlusOne : Nat -> Pos
+    | 0 => ⟨1⟩ -- [\lan] and [\ran]
+    | n + 1 => Pos.succ (natPlusOne n).pred
+    natPlusOne n -/
+
+def seven : Pos := 7
+def one : Pos := 1
+
+#eval one
+#eval seven
+
+def Pos.add (n k : Pos) : Pos := ⟨n.pred + k.pred + 1⟩
+
+instance : Add Pos where
+  add := Pos.add
+
+#eval seven + one
+#eval seven + seven
+
+-- (n + 1) * (k + 1) = n * k + n + k + 1
+def Pos.mul (n k : Pos) : Pos := ⟨(n.pred + 1) * (k.pred + 1) - 1⟩
+
+instance : Mul Pos where
+  mul := Pos.mul
+
+def fortynine : Pos := seven * seven
+#eval fortynine
+
+instance : ToString Pos where
+  toString p := toString (p.pred + 1)
+
+#eval s!"There are {seven}"
+#eval s!"{fortynine} cats and {seven + 1} dogs."
+
+end Exercise1
+
+namespace Exercise2
+-- 27:46 min
+
+inductive IsEven : Nat → Prop
+  | zero : IsEven 0
+  | ss (e : IsEven n) : IsEven (n + 2)
+
+structure Even where
+  half : Nat
+deriving Repr
+
+def Even.add (n k : Even) : Even := ⟨n.half + k.half⟩
+def Even.mul (n k : Even) : Even := ⟨2 * n.half * k.half⟩
+
+instance : Add Even where
+  add := Even.add
+
+instance : Mul Even where
+  mul := Even.mul
+
+instance : ToString Even where
+  toString e := toString (2 * e.half)
+
+
+def two : Even := ⟨1⟩
+def six : Even := ⟨3⟩
+def eight : Even := ⟨4⟩
+def fortytwo : Even := ⟨21⟩
+
+def fourteen := six + eight
+
+#eval six + eight
+#eval s!"♩{fortytwo + two} gatti in fila per {six} col resto di {(⟨1⟩ : Even)}♩"
+
+end Exercise2
+
+namespace Exercise3
+-- 55:31 min; instructions unclear + incompetence of mine + head scratching
+
+-- See https://developer.mozilla.org/en-US/docs/Web/HTTP/Messages
+
+inductive HTTPMethod
+  | get
+  | post (body : String)
+deriving Repr
+
+/- This wasn't requested by the exercise
+   Wasted a lot of time trying to retrofit it in
+   the type class. In fact, it obviates the need
+   for a type class. >:(
+-/
+structure HTTPRequest where
+  method : HTTPMethod
+  version : String
+  uri : String
+deriving Repr
+
+structure HTTPResponse where
+  version : String
+  status : Nat
+  body : Option String
+
+instance : ToString HTTPResponse where
+  toString r := s!"
+http version :: {r.version}
+status       :: {r.status}
+payload      :: {r.body}"
+
+class Server (m : HTTPMethod) where
+  reply : IO HTTPResponse
+
+instance : Server HTTPMethod.get where
+  reply := do
+    IO.println "sup"
+    pure ⟨"HTTP/1.1", 404, Option.some "idk"⟩
+
+instance : Server (HTTPMethod.post body) where
+  reply := do
+    IO.println "nice body"
+    pure ⟨"HTTP/1.1", 200, Option.some s!"
+<html>
+  <body>
+    <p align='center'>{body}</p>
+  </body>
+</html>"⟩
+
+-- My test harness
+#eval Server.reply HTTPMethod.get
+#eval Server.reply (HTTPMethod.post "hello world")
+
+end Exercise3
