@@ -504,3 +504,89 @@ instance [Mul α] : HMul (PPoint α) α (PPoint α) where
 #eval {x := 2.5, y := 3.7 : PPoint Float} * 2.0
 
 end Exercise5
+
+def northernTrees : Array String :=
+  #["sloe", "birch", "spruce", "oak"]
+
+#eval northernTrees[8]?
+#eval northernTrees[2]
+
+structure NonEmptyList (α : Type) : Type where
+  head : α
+  tail : List α
+
+def idahoSpiders : NonEmptyList String := {
+  head := "Banded Garden spider",
+  tail := [
+    "Long-legged Sac Spider",
+    "Wolf Spider",
+    "Hobe Spider",
+    "Cat-faced Spider"
+  ]
+}
+
+def NonEmptyList.get? : NonEmptyList α -> Nat -> Option α
+  | xs, 0 => some xs.head
+  | { head := _, tail := [] }, _ + 1 => none
+  | { head := _, tail := x :: xs }, n+1 =>
+    get? { head := x, tail := xs } n
+
+#eval idahoSpiders.get? 1
+#eval idahoSpiders.get? 5
+
+def NonEmptyList.getL? : NonEmptyList α -> Nat -> Option α
+  | xs, 0 => some xs.head
+  | { head := _, tail := xs }, n + 1 => xs.get? n
+
+#eval idahoSpiders.getL? 0
+#eval idahoSpiders.getL? 4
+
+/- A type constructor defined with [abbrev] so that tactics
+   in charge ofbound checking know to automatically unfold it. -/
+abbrev NonEmptyList.inBounds (xs : NonEmptyList α) (i : Nat) : Prop :=
+  i <= xs.tail.length
+
+theorem atLeastThreeSpiders : idahoSpiders.inBounds 2 :=
+  by simp! -- Idk why I need to use the bang
+
+theorem notSixSpiders : ¬idahoSpiders.inBounds 5 :=
+  by simp!
+
+def NonEmptyList.get (xs : NonEmptyList α) (i : Nat) (ok : xs.inBounds i) : α :=
+  match i with
+  | 0 => xs.head
+  | n + 1 => xs.tail[n]'ok -- Indexes are zero-based: [i] might be illegal for the tail
+  -- Lean automatically derives [n < xs.tail.length], needed for access to [List], from the evidence [ok : n + 1 <= xs.tail.length]
+
+#check @GetElem
+#check @GetElem.getElem
+
+instance {α : Type} : GetElem (NonEmptyList α) Nat α NonEmptyList.inBounds where
+  getElem := NonEmptyList.get
+
+-- This is amazing
+#eval idahoSpiders[0]
+#eval idahoSpiders[4]
+#eval idahoSpiders[3]!
+#eval idahoSpiders[5]?
+
+instance : GetElem (List α) Pos α (fun xs p => p.toNat < xs.length) where
+  getElem := fun xs p ok => xs[p.toNat]'ok
+
+def primesTil7 : List Nat := [2, 3, 5, 7]
+def one : Pos := 1
+
+#eval primesTil7[one]
+#eval primesTil7[(2 : Pos)]
+
+/- [false] selects [x], [true] selects [y].
+   Evidence is vacuous here, since every boolean is a valid index. -/
+instance : GetElem (PPoint α) Bool α (fun _ _ => True) where
+  getElem
+  | p, true, _ => p.y
+  | p, false, _ => p.x
+
+def p1 := {x := 2.5, y := 3.7 : PPoint Float}
+
+#eval p1[false]
+#eval p1[true]
