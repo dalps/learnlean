@@ -590,3 +590,318 @@ def p1 := {x := 2.5, y := 3.7 : PPoint Float}
 
 #eval p1[false]
 #eval p1[true]
+
+/- [==] is the overloaded operator for _Boolean equality_ -/
+#eval "Octopus" == "Octocat"
+#eval (fun (x : Nat) => 1 + x) == Nat.succ
+
+theorem xPlusOne_eq_succ : (fun (x : Nat) => 1 + x) = Nat.succ :=
+  by
+    funext x
+    simp
+    apply Nat.add_comm
+
+-- [if] works with both boolean values and _decidable_ propositions
+#eval if true then "Yes" else "No"
+#eval if 2 == 2 then "Yes" else "No" -- Boolean equality
+#eval if 2 = 2 then "Yes" else "No" -- Prop equality
+#eval if 2 < 4 then "Yes" else "No"
+
+/- The example above work because equality and less-than
+   relations over [Nat]s are decidable, i.e. they are
+   instances of the [Decidable] type class.
+
+   Indeed, propositions that are instances of [Decidable]
+   can be reflected into a [Bool], hence [if] notation can be
+   overloaded for such propositions.
+
+   On the other hand, equality over [Nat -> Nat] is not
+   decidable, so a statement like [xPlusOne_eq_succ] can't
+   be used as the condition of [if]. -/
+
+#eval if (fun (x : Nat) => 1 + x) = Nat.succ then "Yes" else "No"
+
+def Pos.comp : Pos → Pos → Ordering
+  | 1, 1 => Ordering.eq
+  | 1, succ _ => Ordering.lt
+  | succ _, 1 => Ordering.gt
+  | succ n, succ k => n.comp k
+
+instance : ToString Ordering where
+  toString
+  | Ordering.eq => "eq"
+  | Ordering.lt => "lt"
+  | Ordering.gt => "gt"
+
+#eval Pos.comp seven fourteen
+
+instance : Ord Pos where
+  compare := Pos.comp
+
+#eval Ord.compare seven fourteen
+#eval Ord.compare fourteen (seven + 1)
+
+-- Exercise: overload [Ordering] for [Point] using the distance from the origin
+
+-- # Hashing
+
+def hashPos : Pos -> UInt64
+  | Pos.one => 0
+  | Pos.succ n => mixHash 1 (hashPos n)
+
+instance : Hashable Pos where
+  hash := hashPos
+
+#eval Hashable.hash (1 : Pos)
+#eval Hashable.hash (4 : Pos)
+#eval Hashable.hash fourteen
+
+-- [mixHash] is used to combine hashes for different fields for a constructor
+instance [Hashable α] : Hashable (NonEmptyList α) where
+  hash xs := mixHash (Hashable.hash xs.head) (Hashable.hash xs.tail)
+
+#eval Hashable.hash idahoSpiders
+
+inductive BinTree (α : Type) where
+  | leaf : BinTree α
+  | branch : BinTree α -> α -> BinTree α -> BinTree α
+
+/- Boolean equality for binary tree can be implementend provided
+   the elements also implement [BEq], motivating the use of
+   recursive instance search. -/
+def BinTree.eq [BEq α] : BinTree α → BinTree α → Bool
+  | BinTree.leaf, BinTree.leaf => true
+  | BinTree.leaf, _
+  | _, BinTree.leaf => false
+  | BinTree.branch l1 a1 r1, BinTree.branch l2 a2 r2 =>
+    a1 == a2 && l1.eq l2 && r1.eq r2
+
+instance [BEq α] : BEq (BinTree α) where
+  beq := BinTree.eq
+
+open BinTree (leaf branch)
+#eval leaf == branch leaf 1 leaf
+#eval branch leaf 1 leaf == branch leaf 1 leaf
+#eval branch (branch leaf 2 leaf) 1 leaf == branch leaf 1 (branch leaf 2 leaf)
+
+def BinTree.hash [Hashable α] : BinTree α -> UInt64
+  | leaf => 0
+  | branch l a r => mixHash l.hash (mixHash (Hashable.hash a) r.hash)
+
+instance [Hashable α] : Hashable (BinTree α) where
+  hash := BinTree.hash
+
+#eval Hashable.hash (branch (branch leaf 2 leaf) 1 leaf)
+#eval Hashable.hash (branch (branch leaf 3 leaf) 1 leaf)
+#eval Hashable.hash (branch leaf 1 (branch leaf 3 leaf))
+
+/- This was quite tedious to implement by hand!
+
+   Lean is able to _derive_ instances of Standard type classes
+   for user types. In the example of [Point] we derived the class
+   [Repr] in locus of defining the structure type.
+
+   This class let us display [Point] values in the Infoview as simple
+   string transcriptions of the structure syntax. Of course, if we
+   don't like this representation anymore, we're free to override the
+   [Repr] class for [Point] by defining a new custom instance.
+
+   But the point is that what Lean can automatically derive for us behaves
+   sufficiently well for most purposes, saving the programmer a lot of
+   time implmenting a few standard classes by hand - as we did above
+   for the sake of explanation. -/
+
+deriving instance BEq, Hashable for Pos -- Doesn't complain if already defined
+deriving instance BEq, Hashable, Repr for NonEmptyList
+
+-- # Appending
+
+-- Homogeneous appending
+@[default_instance]
+instance : Append (NonEmptyList α) where
+  append l1 l2 := { head := l1.head, tail := l1.tail ++ (l2.head :: l2.tail)}
+
+-- https://spiderid.com/locations/united-states/idaho/?fwp_paged=3
+#eval idahoSpiders ++ ⟨"Woodhouse Hunter",[]⟩ -- Uses the default instance
+
+-- How does one overload list notation? Exercise
+
+instance : HAppend (NonEmptyList α) (List α) (NonEmptyList α) where
+  hAppend xs ys := ⟨xs.head, xs.tail ++ ys⟩ -- Relies on [HAppend]'s instance for [List]
+
+#eval idahoSpiders ++ ["Woodhouse Hunter"]
+#eval idahoSpiders ++ ([] : List String)
+
+-- The other way around is a bit less obvious (official exercise, ~5 min)
+instance : HAppend (List α) (NonEmptyList α) (NonEmptyList α) where
+  hAppend
+  | [], ys => ys
+  | x :: xs, ys => ⟨x,xs ++ ys.head :: ys.tail⟩
+
+#eval ["Woodhouse Hunter", "Trapdoor Spider"] ++ idahoSpiders
+#eval ([] : List String) ++ idahoSpiders
+
+
+-- # Functors
+
+#check @Functor
+#check @Functor.map
+
+/- A polymorphic type (such as [List α]) is a _functor_ if it overloads
+   [Funtcor.map], a function that transforms every element contained in
+   it by a function. -/
+
+-- [List] already overloads [Functor.map], by [List.map]
+#eval Functor.map (· + 5) [1, 2, 3]
+#eval some (1 :: [2, 3])
+#eval Functor.map toString (some (1 :: [2, 3]))
+#eval Functor.map List.reverse [[1, 2, 3], [3, 2, 1]]
+
+/- If a type can be transformed into another by [f], then a container for
+   the first type can be transformed into a container for the second type.
+
+   This is exactly what [map] does. Given a function [f : α → β] as argument,
+   it returns a function on the containers such that [map f : F α → F b].
+
+   [F] is the type constructor for the "container type",
+   e.g. [F : Type → Type := fun τ → List τ] or simply [F := List]
+-/
+
+-- [<$>] is handy infix notation for [Functor.map]
+#eval (· + 5) <$> [1, 2, 3]
+#eval toString <$> (some (1 :: [2, 3]))
+#eval List.reverse <$> [[1, 2, 3], [3, 2, 1]]
+
+/- [Functor] wants the type container constructor, not an abstract
+   application of it for some entry type α.
+   That is to say, the type of the entries doesn't matter. -/
+instance : Functor List where
+  map := List.map
+
+instance : Functor NonEmptyList where
+  map f xs := ⟨f xs.head, List.map f xs.tail⟩
+
+/- [NonEmptyList] is now a [Functor]
+   (i.e., it is the [F] of the definition of functor -/
+#eval ("Freaking cute " ++ ·) <$> idahoSpiders
+#eval (· ++ " my beloved 🥹") <$> idahoSpiders
+#eval ("✨💗✨" ++ · ++ "✨🕷️🕸️✨") <$> idahoSpiders
+
+-- Making [PPoint] a functor is easy
+instance : Functor PPoint where
+  map f p := ⟨f p.x, f p.y⟩
+
+def p2 := (· + 2) <$> p1
+#eval (3.14 + ·) <$> p1
+
+def atLeastOneFloatPoint : NonEmptyList (PPoint Float) := ⟨p1,[p2,p1,p2]⟩
+
+#eval atLeastOneFloatPoint
+-- Each application of [map] only goes down one layer
+#eval ((· + 2) <$> ·) <$> atLeastOneFloatPoint
+
+-- [List.concat] appends an entry at the end of a list
+#check List.append
+#check List.concat
+#eval [1,2,3].concat 1
+#eval [1,2,3].append [1]
+
+
+/- A version of [concat] that reduces a [List α] to an [α]
+   only makes sense on non-empty lists -/
+
+-- First attempt, doesn't preserve order
+def concatSilly [Append α] (xs : NonEmptyList α) : α :=
+  let rec catTail : List α → α
+  | [] => xs.head
+  | y :: ys => y ++ catTail ys
+  catTail xs.tail
+
+#eval concatSilly idahoSpiders  -- puts the front element last, bad
+
+-- Better version of book, also tail recursive
+def NonEmptyList.concat [Append α] (xs : NonEmptyList α) : α :=
+  let rec catList (start : α) : List α → α
+  | [] => start -- yield the accumulation
+  | z :: zs => catList (start ++ z) zs
+  catList xs.head xs.tail
+
+/- Attempts at definition before peeking:
+   Lean does not inspect the list field :(
+
+  match xs.tail with
+  | [] => xs.head
+  | y :: ys => concat ⟨xs.head ++ y, ys⟩
+
+  match xs.tail with
+  | [] => xs.head
+  | y :: ys => xs.head ++ concat ⟨y, ys⟩
+-/
+
+#eval idahoSpiders.concat -- relies on [String]s being [Append]able
+
+#eval Functor.mapConst "1" [1,2,3]
+
+/- Note that [Functor] also defines [mapConst] _default_ method for which
+   it provides a definition that calls the user-defined [map].
+
+   A _default_ method can be overridden, but the implementor is not
+   required to implement it.
+
+   In the case of [Functor], [mapConst] simply maps a constant function
+   over the container.
+-/
+
+/- One might also write a buggy [Functor], i.e. an _unlawful_ functor.
+
+   An unlawful constructor does more stuff than just mapping, such as
+   moving around or erasing the elements of the list. -/
+instance : Functor List where
+  map _ _ := []
+
+#eval (· + 5) <$> [1, 2, 3] -- erased the list!
+#eval id <$> [1, 2, 3] -- mapping [id] should return the list untouched
+
+def f (n : Nat) := toString n
+def g := (· * 2)
+def xs := [1, 2, 3]
+
+#eval (fun y => f (g y)) <$> xs
+#eval f <$> (g <$> xs)
+
+/- (Aside) Lean has an operator for function composition, and
+   [<$>] associates to the right! -/
+
+#eval (f ∘ g) <$> xs
+#eval f <$> (g <$> xs)
+
+/- [LawfulFunctor] prevents buggy implementations by asserting
+   that [map] preserves the identity and the composition laws.
+
+   [LawfulFunctor] fires off a search for an instance of [Functor]
+   for the given type constructor, plus it checks for a few theorems.
+
+   The previous instance would be rejected, because evidence showing
+   that the nonsensical [map] satisfies both [id_map] and [comp_map]
+   cannot be crafted. -/
+#check LawfulFunctor
+#check LawfulFunctor.id_map
+#check LawfulFunctor.comp_map
+
+/- instance : LawfulFunctor NonEmptyList where
+  id_map := by sorry
+  comp_map := by sorry -/
+
+def BinTree.map (f : α → β) : BinTree α → BinTree β
+  | leaf => leaf
+  | branch l a r => branch (l.map f) (f a) (r.map f)
+
+instance : Functor BinTree where
+  map := BinTree.map
+
+def t1 := branch (branch leaf 2 leaf) 1 leaf
+deriving instance Repr for BinTree
+
+#eval (· + 5) <$> t1
+#eval (·) <$> t1
+#eval Functor.mapConst 3 t1
