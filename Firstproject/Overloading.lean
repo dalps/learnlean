@@ -905,3 +905,233 @@ deriving instance Repr for BinTree
 #eval (· + 5) <$> t1
 #eval (·) <$> t1
 #eval Functor.mapConst 3 t1
+
+-- # Coercions
+/-
+  Pos is a subtype of Nat
+  Rings is a subtype of sets
+
+  Wherever the supertype is expected, the subtype will do also fine.
+  The subtype can be _coerced_ to the supertype.
+
+  Defining coercions in Lean reduces to instantiating type classes.
+-/
+
+#eval Pos.toNat seven
+#eval primesTil7.drop seven
+
+/- List.drop cannot be overloaded, because the
+   author did not make it a method of type class.
+
+   We can still make it work by overriding [Coe.coe] for [Pos] and [Nat]. It says that every [Pos] can be transformed into a [Nat]. -/
+
+instance : Coe Pos Nat where
+  coe := Pos.toNat
+
+#eval primesTil7.drop seven
+
+#check List.drop
+#check primesTil7.drop seven -- Instance search inserted a call to [coe] for us, which expands to [Pos.toNat]
+
+/- Coercions are transitive:
+   [Pos] is safe to use where [Int] is expected,because instances of [Coe Pos Nat] and [Coe Nat Int] exists. -/
+def oneInt : Int := seven
+
+/- Circular coercions are fine, what matters is
+   Lean can find a path from an type to an expected type. -/
+inductive A where
+  | a
+
+inductive B where
+  | b
+
+instance : Coe A B where
+  coe _ := B.b
+
+instance : Coe B A where
+  coe _ := A.a
+
+instance : Coe Unit A where
+  coe _ := A.a
+
+def coercedToB : B := ()
+
+deriving instance Repr for B
+#eval coercedToB
+
+/- [Option α] is coerced to [α] by wrapping a value of α in [some].
+   This allows for some nicer definitions. -/
+def List.last? : List α → Option α
+  | [] => none
+  | [x] => x
+  | _ :: xs => last? xs
+
+#eval primesTil7
+#eval primesTil7.last?
+
+def maybeMaybeMaybeItIs : Option (Option (Option String)) := "It is"
+
+def perhapsPerhapsNat1 : Option (Option Nat) := 392
+-- tries to synthesize [OfNat] off the bat and fails to typecheck
+
+def perhapsPerhapsNat2 : Option (Option Nat) := (392 : Nat)
+-- let typechecker know we did't intend 392 to stand for an [Option Nat]
+
+def perhapsPerhapsNat3 : Option (Option Nat) := (392 :)
+-- weird one
+
+def perhapsPerhapsNat4 : Option (Option Nat) := ↑(392 :)
+-- lift manually with ↑ (\u), also help convey programmer intention
+
+instance : Coe (NonEmptyList α) (List α) where
+  coe xs := xs.head :: xs.tail
+
+#eval (List.drop 2 idahoSpiders : List String) -- Why won't it lift!? ... because you must specify an output type
+
+/- On the contrary, it is impossible to devise a bogus coercion:
+   what do you use for the head field when the list is empty? -/
+-- instance : Coe (List α) (NonEmptyList α) where ...
+
+/- I smell a symmetry:
+   - For record (structure) types, the more fields, the stronger the type (Student <: Person).
+   - For sum types, the more constructors, the weaker the type. (α <: Option α - not a good example) -/
+inductive Foo where
+  | a
+  | b
+  | c
+
+inductive Bar where
+  | d
+  | e
+
+instance : Coe Bar Foo where
+  coe
+  | Bar.d => Foo.b
+  | Bar.e => Foo.a
+
+instance : Coe Foo Bar where
+  coe
+  | Foo.a => Bar.d
+  | Foo.b => Bar.e
+  | Foo.c => Bar.e -- unlawful?
+
+instance : Coe α (List α) where
+  coe x := [x]
+
+#eval List.cons "Hello" "world"
+#eval (List.cons "Hello" "world" : List (Option String)) -- coercions are compositional
+#eval (List.drop 1 "world" : List String)
+#eval List.tail "world" -- as before, not enough clues to fill the hole
+#eval (List.tail "world" : List String)
+#eval (List.tail "world" : List (Option String))
+#eval (List.drop 0 "world" : List (Option String))
+#eval (List.drop 1 "world" : List (Option String))
+#eval (List.tail ↑idahoSpiders : List (Option String)) -- this should be legal
+#eval (List.drop 1 ↑idahoSpiders : List (Option String)) -- this should be legal, don't know how to make it work
+
+/- Just like [OfNat] depends on a particular [Nat] value that is being
+   cast to another type, [CoeDep] depends on a value of [α] that is being
+   coerced. This lets us derive a sensible coercion from [List α] to [NonEmptyList α].
+
+   Patterns let you range over a great number of lists, but they have their
+   limitations (as we saw for [Even], where we needed a recursive instance).
+   In this case a constructor pattern suffices. -/
+instance : CoeDep (List α) (a :: as) (NonEmptyList α) where
+  coe := ⟨a,as⟩
+
+#eval (NonEmptyList.get? [] 0 : Option String)
+#eval (NonEmptyList.get? ["🍌","🍆"] 0 : Option String)
+#eval ((["🍌","🍆"] : NonEmptyList String).get? 0 : Option String)
+
+-- # Monoids
+
+-- A structure carrying a [Type]
+structure Monoid where
+  Carrier : Type
+  neutral : Carrier
+  op : Carrier → Carrier → Carrier
+
+-- Some trivial monoids are strings and lists
+def natAddMonoid : Monoid := ⟨Nat, 0, (· + ·)⟩
+def natMulMonoid : Monoid := ⟨Nat, 1, (· * ·)⟩
+def listAppMonoid (α : Type) : Monoid := ⟨List α, [], (· ++ ·)⟩
+def stringAppMonoid : Monoid := ⟨String, "", (· ++ ·)⟩
+
+-- A powerful [foldMap] function can be defined on any monoid (~10 min)
+def foldMap (M : Monoid) (f : α → M.Carrier) (xs : List α) : M.Carrier :=
+  let rec go (acc : M.Carrier) : List α → M.Carrier
+    | [] => acc
+    | a :: as => go (M.op acc (f a)) as
+  go M.neutral xs
+
+#eval foldMap stringAppMonoid id ["hello", "monoid"]
+#eval foldMap (listAppMonoid String) id [["hello", "world!"], ["come", "butta?"]]
+#eval foldMap natAddMonoid
+        (fun str => (Hashable.hash str).toNat)
+        (idahoSpiders : List String)
+
+/- In mathematic it is common to refer to the carrier set with the same name
+   as the monoid. Encoding this practice in Lean requires a higher-kinded
+   type class for coercion, that works among types rather than values.
+   This is accomplished by the [CoeSort] class.
+
+   Loosely put, the hierarchy goes something like this:
+
+   value    ∈ type        ∈ Type ∈ Sort
+   evidence ∈ proposition ∈ Prop ∈ Sort
+              ↑             ↑
+              |             [CoeSort] works at this level
+              [Coe] and [CoeDep] work at this level
+-/
+
+instance : CoeSort Monoid Type where
+  coe M := M.Carrier -- Use capital letters when dealing with types
+
+/- Under this instance, we can talk about carrier sets
+   and their monoids interchangably, as in the following
+   new signature for [foldMap]:
+-/
+def Monoid.foldMap (M : Monoid) (f : α → M) (xs : List α) : M :=
+  let rec go (acc : M) : List α -> M
+    | [] => acc
+    | a :: as => go (M.op acc (f a)) as
+  go M.neutral xs
+
+#eval (listAppMonoid Nat).foldMap ([·]) [1,2,3]
+#check (listAppMonoid (Option Nat)).foldMap ([·]) ([1,2,3] :) -- pesky [OfNat] gets in the way
+
+#check (listAppMonoid (Option Bool)).foldMap ([·]) [true]
+
+#check (["hello", "world"] : List (Option String))
+#eval (listAppMonoid (Option String)).foldMap ([·]) ["1","2","3"]
+
+-- # Reflection
+
+/- In reality, [if] in Lean is defined only on propositions. That is, it
+   expects the condition to be a decidable proposition rather than a Bool.
+   To make [if] work on boolean as is the norm in most languages, Lean
+   coerces [Bool] _values_ to the _proposition_ that the [Bool] in question
+   is equal to true. This time, the coercion is from a datatype to a sort!
+-/
+
+instance : CoeSort Bool Prop where
+  coe b := b = true
+
+theorem trueIsTrue : true := by simp
+theorem falseIsNotTrue : ¬false := by simp -- ¬(false = true)
+
+-- # Coercing functions
+
+-- [Adder] represents a class of functions
+structure Adder where
+  howMuch : Nat -- constant amount to add
+
+def add5 : Adder := ⟨5⟩
+
+-- but isn't quite one, yet
+#eval add5 3
+
+instance : CoeFun Adder (fun _ => Nat → Nat) where
+  coe a := (· + a.howMuch)
+
+#eval add5 3
