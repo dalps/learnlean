@@ -1292,3 +1292,56 @@ def ibo : Student := ⟨"Ibo",20,3.9⟩
 #eval ibo.name
 #eval ibo.fullname -- I think this exemplifies the limiation
 #eval (ibo : Person).fullname
+
+structure Tree : Type where
+  latinName : String
+  commonNames : List String
+
+-- Three kinds of syntax for record values
+
+def oak : Tree :=
+  ⟨"Quercus robur", ["common oak", "European oak"]⟩
+
+def birch : Tree :=
+  { latinName := "Betula pendula",
+    commonNames := ["silver birch", "warty birch"]
+  }
+
+-- Avoid curly braces with [where]
+def sloe : Tree where
+  latinName := "Prunus spinosa"
+  commonNames := ["sloe", "blackthorn"]
+
+-- [where] starts off an enumeration of fields
+
+-- Type classes are structure types, instances are structure values
+
+class Display (α : Type) where
+  display : α → String
+
+-- So far, you've been doing it like this
+instance : Display Tree where
+  display t := t.latinName
+
+-- But it can also be done like this
+instance : Display Tree := ⟨Tree.latinName⟩
+instance : Display Tree := { display := Tree.latinName }
+
+/- Convenient syntax for quickly typechecking an expression,
+   proving something not relevant in the rest of the code, or
+   demoing a library. -/
+
+example : NonEmptyList String where
+  head := "Sparrow"
+  tail := ["Duck", "Swan", "Magpie", "Eurasion coot", "Crow"]
+
+
+example (n : Nat) (k : Nat) : Prop :=
+  n + k = k + n
+
+/- A type class definition consists in:
+  - a name
+  - parameter, which answer the question: what aspect of the definitions can be overloaded?
+  - a body, containing names and type signatures of the overloadable operations, more appropriately called _methods_
+    + some default methods providing default implementations in terms of the others
+-/
