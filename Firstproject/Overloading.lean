@@ -1,3 +1,5 @@
+import Lean
+
 /- Nonzero natural numbers. Although the definition
    is identical to that of Nat, Pos behaves differently
    in the definition of addition etc. -/
@@ -1131,7 +1133,162 @@ def add5 : Adder := ⟨5⟩
 -- but isn't quite one, yet
 #eval add5 3
 
+/- You can give whatever function you want as the argument to [CoeFun]'s
+   second parameter, and associate different function types to different values. Isn't that so cool? -/
 instance : CoeFun Adder (fun _ => Nat → Nat) where
   coe a := (· + a.howMuch)
 
 #eval add5 3
+
+inductive Zot where
+  | y : Bool -> Zot
+  | z : Foo -> Zot
+
+open Foo Zot in
+#check [y true, z a, y false, z b]
+
+-- Cannot mix [Bool] and [Foo] in a list, yet
+#check [false, Foo.a, true, Foo.b]
+#check ([Foo.a, true, Foo.b, false] : List Zot)
+
+instance : Coe Bool Zot where
+  coe x := Zot.y x
+
+instance : Coe Foo Zot where
+  coe foo := Zot.z foo
+
+-- Now I can! It's just as if I overloaded the [...] notation
+#check ([Foo.a, true, Foo.b, false] : List Zot)
+
+#check CoeFun.coe
+
+/- In the particular case of [Adder], the value of [Adder] wansn't
+   needed to determine the right function type.
+
+   Here's a case where discerning among values is useful. -/
+inductive JSON where
+  | true : JSON
+  | false : JSON
+  | null : JSON
+  | string : String → JSON
+  | number : Float → JSON
+  | object : List (String × JSON) → JSON
+  | array : List JSON → JSON
+deriving Repr
+
+structure Serializer where
+  Contents : Type
+  serialize : Contents → JSON
+
+def Str : Serializer :=
+  { Contents := String,
+    serialize := JSON.string
+  }
+
+instance : CoeFun Serializer (fun slz => slz.Contents → JSON) where
+  coe slz := slz.serialize
+
+#eval Str "Hello world!"
+
+def buildResponse (title : String) (R : Serializer) (record : R.Contents) : JSON :=
+  JSON.object [
+    ("title", JSON.string title),
+    ("status", JSON.number 200),
+    ("record", R record)
+  ]
+
+def res : JSON := buildResponse "The rise of the decline" Str "If it's up then it goes down"
+#eval res
+
+#eval (5 : Float)
+#eval (5 : Float).toString
+
+def dropDecimals' (numString : String) : String :=
+  String.dropRightWhile numString (fun | '0' => true | _ => false)
+
+#eval (5 : Float).toString |> dropDecimals'
+#eval (3.05 : Float).toString |> dropDecimals'
+#eval (5.000 : Float).toString |> dropDecimals' -- Should remove the dot
+#eval (5000 : Float).toString |> dropDecimals' -- Not robust enough: what if there wasn't a dot! You'd be changing the value!
+
+-- Better version of book
+def dropDecimals (numString : String) : String :=
+  if numString.contains '.' then
+    let noTrailingZeros := numString.dropRightWhile (· == '0')
+    noTrailingZeros.dropRightWhile (· == '.')
+  else
+    numString
+
+#eval (5 : Float).toString |> dropDecimals
+#eval (5.2 : Float).toString |> dropDecimals
+
+def String.separate (sep : String) (strings : List String) : String :=
+  match strings with
+  | [] => ""
+  | [s] => s
+  | s :: ss => s ++ sep ++ sep.separate ss
+
+#eval "; ".separate ["Hello", "my", "old", "friend"]
+#eval ", ".separate ["1"]
+#eval ", ".separate ["1", "2"]
+#eval ", ".separate []
+#eval "".separate ["1", "2"]
+
+#eval "\""
+#eval "\"Hello!\""
+#eval Lean.Json.escape "Hello"
+#eval "Hello"
+
+/- JSON renderer.
+   Forgot bracks around objects and arrays,
+   also forgot to escape string quotes in strings and keys -/
+partial def JSON.asString (val : JSON) : String :=
+  match val with
+  | true => "true"
+  | false => "false"
+  | null => "null"
+  | number n => n.toString |> dropDecimals
+  | string s => "\"" ++ Lean.Json.escape s ++ "\""
+  | object os => List.map (fun (k,v) => "\"" ++ k ++ "\": " ++ asString v) os |> ("{" ++ ", ".separate · ++ "}")
+  | array os => List.map asString os |> ("[" ++ ", ".separate · ++ "]")
+
+#eval res.asString
+
+def perhapsPerhapsPerhapsNat : Option (Option (Option Nat)) :=
+  (392 : Nat)
+/- Lean looks for an overloading of [OfNat] for [Option (Option (Option Nat))]
+   first, which is missing. Missing instances don't fire coercions, only
+   type mismatch does. To overcome this, make clear that 392 is supposed
+   to be a [Nat], then the type mismatch will fire a coercion. -/
+
+/- [NonEmptyList]s are (coerced to) [List]s, so we can use the [List] API
+   on them. However, we need to clearly state what type we're getting at when
+   using the API on NonEmptyList, otherwise Lean won't be able - nor try to,
+   since there are not output parameteres in [Coe] - to find a coercion. -/
+def lastSpider : Option String :=
+  List.getLast? idahoSpiders
+
+#eval lastSpider
+
+/- Additionally, coercions are not applied in the context
+   of field accessor notation. -/
+
+structure Person where
+  fullname : String
+  age : Nat
+
+structure Student where
+  name : String
+  age : Nat
+  gpa : Float
+
+-- A [Student] is safe to use in the context of a [Person]
+instance : Coe Student Person where
+  coe s := ⟨s.name,s.age⟩
+
+def jeff : Person := ⟨"Jeff",21⟩
+def ibo : Student := ⟨"Ibo",20,3.9⟩
+
+#eval ibo.name
+#eval ibo.fullname -- I think this exemplifies the limiation
+#eval (ibo : Person).fullname
