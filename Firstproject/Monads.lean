@@ -1,3 +1,4 @@
+-- # Chaining options
 namespace Maybe
 
 def first (xs : List α) : Option α :=
@@ -62,6 +63,7 @@ def firstThirdFifthSeventh'' (xs : List α) : Option (α × α × α × α) :=
 
 end Maybe
 
+-- # Handling exceptions
 namespace Exception
 
 -- Lean's equivalent of OCaml's [('a,'e) Result]
@@ -130,6 +132,38 @@ ediblePlants
 
 end Exception
 
+inductive BinTree (α : Type) where
+  | leaf : BinTree α
+  | branch : BinTree α -> α -> BinTree α -> BinTree α
+deriving Repr
+
+open BinTree
+def tree : BinTree Int :=
+  branch
+    (branch leaf 2 leaf)
+    1
+    (branch
+      (branch leaf 3
+        (branch leaf 5 leaf))
+      4
+      leaf)
+
+def tree2 : BinTree Int :=
+  branch
+    (branch
+      (branch
+        (branch
+          (branch leaf 0 leaf)
+          1
+          leaf)
+        2
+        leaf)
+      3
+      (branch leaf (-3) leaf))
+    4
+    (branch leaf 5 leaf)
+
+-- # Logging
 namespace Logging
 
 def isEven (i : Int) : Bool :=
@@ -144,11 +178,6 @@ def isEven (i : Int) : Bool :=
 #eval sumAndFindEvens [0,2,4,6,8,10]
 #eval sumAndFindEvens [0,1,2,4,7,6,1,21]
 
-inductive BinTree (α : Type) where
-  | leaf : BinTree α
-  | branch : BinTree α -> α -> BinTree α -> BinTree α
-deriving Repr
-
 def inorderSum : BinTree Int → List Int × Int
   | BinTree.leaf => ([], 0)
   | BinTree.branch l v r =>
@@ -156,17 +185,6 @@ def inorderSum : BinTree Int → List Int × Int
     let (hereVisited, hereSum) := ([v], v)
     let (nodesR, sumR) := inorderSum r
     (nodesL ++ hereVisited ++ nodesR, sumL + hereSum + sumR)
-
-open BinTree
-def tree : BinTree Int :=
-  branch
-    (branch leaf 2 leaf)
-    1
-    (branch
-      (branch leaf 3
-        (branch leaf 5 leaf))
-      4
-      leaf)
 
 #eval inorderSum tree
 
@@ -232,21 +250,6 @@ def inorderSum' : BinTree Int → WithLog Int Int
 #eval inorderSum' tree
 
 -- [inorderSum] logs the left branch first then the root and finally the right branch
-def tree2 : BinTree Int :=
-  branch
-    (branch
-      (branch
-        (branch
-          (branch leaf 0 leaf)
-          1
-          leaf)
-        2
-        leaf)
-      3
-      (branch leaf (-3) leaf))
-    4
-    (branch leaf 5 leaf)
-
 #eval inorderSum' tree2
 
 infixl:55 " ~~> " => andThen
@@ -269,6 +272,8 @@ def inorderSum'' : BinTree Int → WithLog Int Int
 #eval sumAndFindEvens''' [0,2,4,6,8,10]
 #eval sumAndFindEvens''' [0,1,2,4,7,6,1,21]
 #eval inorderSum'' tree2
+
+end Logging
 
 def aTree :=
   branch
@@ -294,7 +299,6 @@ def descendRight (t : BinTree α) : Option α :=
 #eval descendRight aTree
 
 -- # Numbering a tree in an inorder fashion
-
 /- First attempt:
 def tryNumbering : BinTree Int -> BinTree (Nat × Int)
   | leaf => leaf
@@ -318,8 +322,7 @@ def number (t : BinTree α) : BinTree (Nat × α) :=
 #eval number tree
 #eval number tree2
 
--- ## Stateful computations
-
+-- # Stateful computations
 namespace Stateful
 
 /- The thing we want to propagate now is a [State] for a single mutable
@@ -372,13 +375,139 @@ def number (t : BinTree α) : BinTree (Nat × α) :=
 
 end Stateful
 
-end Logging
+-- # The monad type class
+namespace Monad
 
+instance : Monad Option where
+  pure := some
+  bind := Maybe.andThen
 
--- Use a single element to represent the one element word
-instance : Coe α (List α) where
-  coe a := [a]
+instance : Monad (Exception.Except ε) where
+  pure := Exception.ok
+  bind := Exception.andThen
 
-example : Option Nat := List.get? (1 : Nat) 42
-example : Option Char := List.get? 'a' 42
-example : Option Bool := List.get? true 0
+def firstThirdFifthSeventh [Monad m] (lookup : List α → Nat → m α) (xs : List α) : m (α × α × α × α) :=
+  lookup xs 0 >>= fun first =>
+  lookup xs 2 >>= fun third =>
+  lookup xs 4 >>= fun fifth =>
+  lookup xs 6 >>= fun seventh =>
+  pure (first, third, fifth, seventh)
+
+-- This very general lookup function can be used with any instance of [Monad]
+
+def slowMammals : List String :=
+  ["Three-toead sloth", "Slow loris"]
+
+def fastBirds : List String := [
+  "Peregrine falcon",
+  "Saker falcon",
+  "Golden eagle",
+  "Gray-headed albatross",
+  "Spur-winged goose",
+  "Swift",
+  "Anna's hummingbird"
+]
+
+#eval firstThirdFifthSeventh List.get? slowMammals
+#eval firstThirdFifthSeventh List.get? fastBirds
+
+#eval firstThirdFifthSeventh Exception.get slowMammals
+#eval firstThirdFifthSeventh Exception.get fastBirds
+
+-- 14:16 min
+def mapM [Monad m] (f : α → m β) : List α → m (List β)
+  | [] => pure []
+  | x :: xs =>
+    f x >>= fun y =>
+    mapM f xs >>= fun ys =>
+    pure (y :: ys)
+
+#eval mapM some slowMammals
+
+/- Just like the instance of [Excpet] mentioned a type [ε] for the error
+   messages that becomes a parameter to the instance, the state type
+   [σ] now becomes an instance parameter of [State].
+
+   This means that, when sequencing [State] values, the type of the state
+   cannot change, which is a reasonable rule. -/
+
+instance : Monad (Stateful.State σ) where
+  pure := Stateful.ok
+  bind := Stateful.andThen
+
+open Stateful
+def increment (howMuch : Int) : State Int Int :=
+  get >>= fun x =>
+  set (x + howMuch) >>= fun () =>
+  pure x -- if you return [get] you shift the partial sum by the first element
+
+instance [ToString α] : ToString (State Int α) where
+  toString f := s!"{f 0}, {f 1}, {f 2}..."
+
+#check mapM increment
+#eval mapM increment [1, 2, 3, 4, 5]
+#eval mapM increment [1, 2, 3, 4, 5] 0
+#eval mapM increment [1, 2, 3, 4, 5] 1
+
+instance : Monad (Logging.WithLog Λ) where
+  pure := Logging.ok
+  bind := Logging.andThen
+
+open Logging
+def logIfEven (x : Nat) : WithLog Nat Nat :=
+  (if isEven x then
+    save x
+    else pure ()) >>= fun () =>
+  pure x
+
+#eval mapM logIfEven [1, 2, 3, 4, 5]
+
+def logIfStartsWithS (s : String) : WithLog String String :=
+  (if String.startsWith s "S" then
+    save s
+    else pure ()) >>= fun () =>
+  pure s
+
+#eval mapM logIfStartsWithS fastBirds
+
+class LogIf (p : α → Bool) where
+  logIf (x : α) : WithLog α α :=
+    (if p x then
+      save x
+      else pure ()) >>= fun () =>
+    pure x
+
+-- Monads encode programs with effects
+
+-- Or no effects at all, i.e. pure computations:
+def Id (t : Type) : Type := t -- Identity on types
+
+instance : Monad Id where
+  pure x := x -- [pure : α → Id α], i.e. [α → α]
+  bind x next := next x -- [bind : Id α → (α → Id β) → Id β], i.e. [α → (α → β) → β]
+  -- [next] doensn't change the type
+
+-- With the identity monad, [mapM] is equivalent to [map]
+#eval mapM (· + 1) [1, 2, 3, 4, 5] -- not quite right, need to fiddle with the implicit instance
+#eval mapM (m := Id) (· + 1) [1, 2, 3, 4, 5]
+#eval mapM (fun x => x) [1, 2, 3, 4, 5] -- Lean can't figure out what kind of monad we want
+
+-- # Lawful monads
+
+/- Every instance of [Monad] should obey three rules:
+
+    1. [pure] is a left identity of [bind]: [bind (pure v) f = v]
+    2. [pure] is a right identify of [bind]: [bind v pure = v]
+    3. [bind] is associative: [bind (bind v f) g = bind v (fun w => bind (f w) g)],
+       or [(v >>= f) >>= g = v >>= (fun w => f w >>= g)]
+
+    These rules ensure that:
+    * [pure] is the program with no side-effects
+    * sequencing effects with [pure] and [bind] doesn't change the result
+    * the sequencing bookkeping itself doesn't matter, so long as the order
+      in which things are happening (first [f], then [g]) is preserved.
+-/
+
+#eval mapM (m := Id) (fun x : Nat => x) ([1, 2, 3, 4, 5]) -- Lean can't figure out what kind of monad we want
+
+end Monad

@@ -1345,3 +1345,11 @@ example (n : Nat) (k : Nat) : Prop :=
   - a body, containing names and type signatures of the overloadable operations, more appropriately called _methods_
     + some default methods providing default implementations in terms of the others
 -/
+
+-- Use a single element to represent the one element word
+instance : Coe α (List α) where
+  coe a := [a]
+
+example : Option Nat := List.get? (1 : Nat) 42
+example : Option Char := List.get? 'a' 42
+example : Option Bool := List.get? true 0
