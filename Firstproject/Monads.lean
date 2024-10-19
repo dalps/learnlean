@@ -454,7 +454,7 @@ instance : Monad (Logging.WithLog Λ) where
   bind := Logging.andThen
 
 open Logging
-def logIfEven (x : Nat) : WithLog Nat Nat :=
+def logIfEven (x : Int) : WithLog Int Int :=
   (if isEven x then
     save x
     else pure ()) >>= fun () =>
@@ -462,13 +462,14 @@ def logIfEven (x : Nat) : WithLog Nat Nat :=
 
 #eval mapM logIfEven [1, 2, 3, 4, 5]
 
-def logIfStartsWithS (s : String) : WithLog String String :=
-  (if String.startsWith s "S" then
+def logIfStartsWith (pre : String) (s : String) : WithLog String String :=
+  (if String.startsWith s pre then
     save s
     else pure ()) >>= fun () =>
   pure s
 
-#eval mapM logIfStartsWithS fastBirds
+#eval mapM (logIfStartsWith "S") fastBirds
+#eval mapM (logIfStartsWith · "A") fastBirds
 
 class LogIf (p : α → Bool) where
   logIf (x : α) : WithLog α α :=
@@ -508,6 +509,106 @@ instance : Monad Id where
       in which things are happening (first [f], then [g]) is preserved.
 -/
 
-#eval mapM (m := Id) (fun x : Nat => x) ([1, 2, 3, 4, 5]) -- Lean can't figure out what kind of monad we want
+#eval mapM (m := Id) (fun x : Nat => x) ([1, 2, 3, 4, 5])
 
 end Monad
+
+#check List.mapM
+
+-- 12:30 min
+def BinTree.mapM [Monad m] (f : α → m β) : BinTree α → m (BinTree β)
+  | BinTree.leaf => pure (BinTree.leaf)
+  | BinTree.branch left x right =>
+    left.mapM f  >>= fun left'  =>
+    f x          >>= fun x'     =>
+    right.mapM f >>= fun right' =>
+    pure (BinTree.branch left' x' right')
+
+#eval aTree.mapM (Monad.logIfStartsWith "a")
+#eval tree.mapM Monad.logIfEven
+#eval tree2.mapM some
+
+/- The [Monad] instance for [Option]: -/
+
+instance : Monad Option where
+  pure x := some x
+  bind opt next :=
+    match opt with
+    | none => none
+    | some x => next x
+
+/- satisfies the monad contract.
+    Proof:
+
+    1. [some] is a left identity for [bind]
+
+       bind (pure x) f = f x
+       bind (some x) f = f x  -- Definition of [pure]
+       f x = f x              -- Definition of [bind], case [some]
+
+    2. [some] is a right identity for [bind]
+
+       bind v pure = v
+       bind v some = v
+
+       - If [v = none], then [bind v some = none]
+
+         bind none some = none
+         none
+
+       - Otherwise [v = some x] for some [x], and
+
+         bind (some x) some = some x
+         some x = some x
+
+       In both cases, the two sides are equal.
+
+    3. [bind] is associative:
+
+       bind (bind x f) g = bind x (fun y => bind (f y) g)
+
+       By analysis on the shape of [x]:
+
+       - [x = none]
+
+          bind (bind none f) g = bind none (fun y => bind (f y) g)
+          bind none g = none
+          none = none
+
+       - [x = some y]
+
+          bind (bind (some y) f) g = bind (some y) (fun z => bind (f z) g)
+          bind (f y) g = (fun z => bind (f z) g) y
+          bind (f y) g = bind (f y) g
+
+       We have an equality in both cases.
+-/
+
+instance : LawfulMonad Option where
+  pure_bind := by sorry
+  bind_assoc := by sorry
+  bind_map := by sorry
+  bind_pure_comp := by sorry
+
+/-
+  The instance where [bind] is [none] on any input is unlawful.
+
+  instance : Monad Option where
+    pure x := some x
+    bind opt next := none
+
+  It violates the first rule for the function [some]:
+
+    bind (some x) some = some x
+    none = some x
+
+  and also the second rule for [x = some x']:
+
+    bind x pure = x
+    bind x some = x
+    none = some x'
+
+  while it is preserves associativity.
+-/
+
+#check LawfulMonad
