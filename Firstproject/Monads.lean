@@ -528,7 +528,7 @@ def BinTree.mapM [Monad m] (f : α → m β) : BinTree α → m (BinTree β)
 #eval tree.mapM Monad.logIfEven
 #eval tree2.mapM some
 
-/- The [Monad] instance for [Option]: -/
+/- The [Monad] instance for [Option]: -/ -- Ending a commend with : is buggy
 
 instance : Monad Option where
   pure x := some x
@@ -610,5 +610,358 @@ instance : LawfulMonad Option where
 
   while it is preserves associativity.
 -/
+#check LawfulMonad
+
+-- # Arithmetic expressions
+namespace ArithExpr
+
+inductive Expr (op : Type) where
+  | const : Int → Expr op
+  | prim : op → Expr op → Expr op → Expr op
+
+inductive Arith where
+  | plus
+  | minus
+  | times
+  | div
+
+-- Expressions are binary trees
+open Expr Arith
+
+def twoPlusThree : Expr Arith := prim plus (const 2) (const 3)
+
+def fortyPlusTwo : Expr Arith :=
+  prim plus (prim times (const 10) (const 4)) (const 2)
+
+def fourteenDivided : Expr Arith :=
+  prim div (const 14)
+    (prim minus (const 45) (prim times (const 5) (const 9)))
+
+-- # Evaluation with Option
+namespace WithOption
+
+-- ~5 min
+def evaluateOption' : Expr Arith → Option Int
+  | const i => pure i
+  | prim op left right =>
+    evaluateOption' left >>= fun vl =>
+    evaluateOption' right >>= fun vr =>
+    match op with
+    | plus =>  pure (vl + vr)
+    | minus => pure (vl - vr)
+    | times => pure (vl * vr)
+    | div => if vr == 0 then none else pure (vl / vr)
+
+#eval evaluateOption' fortyPlusTwo
+#eval evaluateOption' fourteenDivided
+
+def applyPrim : Arith → Int → Int → Option Int
+  | plus, x1, x2 => pure (x1 + x2)
+  | minus, x1, x2 => pure (x1 - x2)
+  | times, x1, x2 => pure (x1 * x2)
+  | div, x1, x2 => if x2 == 0 then none else pure (x1 / x2)
+
+def evaluateOption : Expr Arith → Option Int
+  | const i => pure i
+  | prim p e1 e2 =>
+    evaluateOption e1 >>= fun v1 =>
+    evaluateOption e2 >>= fun v2 =>
+    applyPrim p v1 v2
+end WithOption
+
+
+def divFail (x : Int) : Except String Int :=
+  Except.error s!"Tried to divide {x} by zero"
+
+-- # Evaluation with Except
+-- Let's return a meaningful error message
+namespace WithExcept
+
+-- Note: using Lean's [Except] API
+def applyPrim : Arith → Int → Int → Except String Int
+  | plus, x1, x2 => pure (x1 + x2)
+  | minus, x1, x2 => pure (x1 - x2)
+  | times, x1, x2 => pure (x1 * x2)
+  | div, x1, x2 =>
+    if x2 == 0 then
+      divFail x1
+    else pure (x1 / x2)
+
+def evaluateExcept : Expr Arith → Except String Int
+  | const i => pure i
+  | prim p e1 e2 =>
+    evaluateExcept e1 >>= fun v1 =>
+    evaluateExcept e2 >>= fun v2 =>
+    applyPrim p v1 v2
+
+/- The downside of this evaluator is having to rewrite two
+   definitions every time I want a different effect.
+
+   Can the effect be factored out then? Yes, by making it polymorphic over its monad! -/
+end WithExcept
+
+-- # Abstacting over any monad
+def applyPrimOption := WithOption.applyPrim
+def applyPrimExcept := WithExcept.applyPrim
+
+/- By moving the operator logic to [applyPrim], [evaluate] doesn't
+   have to worry of handling errors, and the two methods of
+   [Monad] suffice to define it. Moreover, by abstracting over
+   [applyPrim] itself, it can achieve any side-effect. -/
+def evaluateM' [Monad m] (applyPrim : Arith → Int → Int → m Int) : Expr Arith → m Int
+  | const i => pure i
+  | prim p e1 e2 =>
+    evaluateM' applyPrim e1 >>= fun v1 =>
+    evaluateM' applyPrim e2 >>= fun v2 =>
+    applyPrim p v1 v2
+
+def evaluateOption := evaluateM' applyPrimOption
+def evaluateExcept := evaluateM' applyPrimExcept
+
+#eval evaluateOption fourteenDivided
+#eval evaluateExcept fourteenDivided
+
+-- # Abstracting over division
+def applyDivOption (x : Int) (y : Int) : Option Int :=
+  if y == 0 then
+    none
+  else pure (x / y)
+
+def applyDivExcept (x : Int) (y : Int) : Except String Int :=
+  if y == 0 then
+    divFail x
+  else pure (x / y)
+
+def applyPrim [Monad m] (applyDiv : Int → Int → m Int) : Arith → Int → Int → m Int
+  | plus,  x, y => pure (x + y)
+  | minus, x, y => pure (x - y)
+  | times, x, y => pure (x * y)
+  | div,   x, y => applyDiv x y
+
+def evaluateM [Monad m] (applyDiv : Int → Int → m Int) : Expr Arith → m Int
+  | const i => pure i
+  | prim p e1 e2 =>
+    evaluateM applyDiv e1 >>= fun v1 =>
+    evaluateM applyDiv e2 >>= fun v2 =>
+    applyPrim applyDiv p v1 v2
+
+namespace Special
+/- The two code paths differ only in their treatment of error,
+   in particular when dividing two numbers. If error can occur
+   in other operators, it might be more convenient to leave [applyPrim] as specialized as it was.
+
+   To cover more interesing effects, additional refactoring is
+   beneficial. -/
+
+-- # Abstracting over any effectful operation
+inductive Prim (special : Type) where
+  | plus
+  | minus
+  | times
+  | other : special → Prim special
+
+/- [other] is an effort to categorize the effects operators other
+   than the "pure" ones ([plus], [minus], [times]) bring about. -/
+
+inductive CanFail where
+  | div
+
+def divOption : CanFail → Int → Int → Option Int
+  | CanFail.div, x, y => if y == 0 then none else pure (x / y)
+
+def divExcept : CanFail → Int → Int → Except String Int
+  | CanFail.div, x, y => if y == 0 then divFail x else pure (x / y)
+
+/- [evaluateM] depends on [applyPrim] and therefore on any
+   parameter of [applyPrim].
+
+   Note: [special] is an implicit type parameter of [applyPrim]. -/
+def applyPrim [Monad m] (applySpecial : special → Int → Int → m Int) : Prim special → Int → Int → m Int
+  | Prim.plus, x, y => pure (x + y)
+  | Prim.minus, x, y => pure (x - y)
+  | Prim.times, x, y => pure (x * y)
+  | Prim.other op, x, y => applySpecial op x y
+
+def evaluateM [Monad m] (applySpecial : special → Int → Int → m Int) : Expr (Prim special) → m Int
+  | const i => pure i
+  | prim p e1 e2 =>
+    evaluateM applySpecial e1 >>= fun v1 =>
+    evaluateM applySpecial e2 >>= fun v2 =>
+    applyPrim applySpecial p v1 v2
+
+-- # No effects at all
+
+/- Using the [Empty] type as the parameter [special] of [Prim]
+   we forbid the evaluation of operators beyond [plus], [minus]
+   and [times], because it is impossible to place a value of
+  type [Empty] within the [other] constructor.
+
+   The argument to [applySpecial] when [special] is [Empty]
+   stands for dead code: code that neither can be called nor
+   it returns a result. Passing [applyEmpty] to [evaluateM]
+   signals that [evaluateM] and instantiating the instance
+   implicit monad with [Id] allows us to evaluate expressions
+   that are free of effects.
+-/
+def applyEmpty [Monad m] (op : Empty) (_ : Int) (_ : Int) : m Int :=
+  nomatch op -- Like [exfalso]: when one of your premises is false, you can imply false
+
+open Expr Prim
+#eval evaluateM (m := Id) applyEmpty (prim plus (const 5) (const (-14)))
+#eval evaluateM (m := Id) applyEmpty (prim (other CanFail.div) (const 5) (const (-14)))
+#eval evaluateM divExcept (prim (other CanFail.div) (const 5) (const (-14)))
+#eval evaluateM divOption (prim (other CanFail.div) (const 42) (const (-14)))
+end Special
+
+-- # Recovering from failure
+namespace NonDeterministic
+
+inductive Many (α : Type) where
+  | none : Many α
+  | more : α → (Unit → Many α) → Many α
+
+def Many.one (x : α) : Many α := Many.more x (fun () => Many.none)
+
+instance : Coe α (Many α) where
+  coe := Many.one
+
+-- ~5 min
+def Many.union : Many α → Many α → Many α
+  | none, m => m
+  | more one others, m => more one (fun () => (others ()).union m)
+
+#check (Many.union "calico" "siamese" : Many String)
+
+def multi1 : Many Int := Many.union (1 : Int) (2 : Int)
+
+def Many.fromList : List α → Many α
+  | [] => none
+  | x :: xs => Many.more x (fun () => fromList xs)
+
+-- ~5 min
+def Many.take : Nat → Many α → List α
+  | 0, _ => []
+  | _ + 1, none => []
+  | n + 1, more x xs => x :: ((xs ()).take n)
+
+def Many.takeAll : Many α → List α
+  | none => []
+  | more x xs =>  x :: (xs ()).takeAll
+
+#eval multi1.take 24
+#eval multi1.takeAll
+
+def Many.pure : α → Many α := Many.one
+
+def Many.bind : Many α → (α → Many β) → Many β
+  | none, _ => none -- Nothing to combine, return nothing
+  | more x xs, next =>
+    Many.union (next x) (bind (xs ()) next)
+
+/- [Many.one] and [Many.bind] obey the monad contract:
+
+  1. [Many.one] is a left identity for [Many.bind]
+  bind (one v) f = f v
+  bind (more v (fun () => none)) f = f v
+  union (f v) (bind none f) = f v
+  union (f v) none = f v
+  f v = f v -- The empty multiset is a right identity of [union]
+
+  2. [Many.one] is a right identity for [Many.bind]
+  bind v one = v -- By induction on [v]
+
+  * bind none one = none
+    none = none
+
+  * bind (more x xs) one = more x xs
+    union (one x) (bind (xs ()) one) = more x xs
+    {v1} ⋃ {v2} ⋃ {v3} ⋃ ... ⋃ {vn} = more x xs
+
+  3. [Many.bind] is associative
+  bind (bind v f) g = bind v (fun y => bind (f y) g)
+
+  * bind (bind none f) g = bind none (fun y => bind (f y) g)
+    none = none
+
+  * bind (bind v f) g
+    bind (bind {v1, v2, v3, ..., vn} f) g =
+    bind (f v1 ⋃ f v2 ⋃ f v3 ... ⋃ f vn) g =
+    bind {v1₁, ..., v1ₙ₁,
+          v2₁, ..., v2ₙ₂,
+          v3₁, ..., v3ₙ₃,
+          ...
+          v3₁, ..., v3ₙₘ,} g =
+    (g v1₁ ⋃ ... ⋃ g v1ₙ₁ ⋃
+     g v2₁ ⋃ ... ⋃ g v2ₙ₂ ⋃
+     g v3₁ ⋃ ... ⋃ g v3ₙ₃ ⋃
+     ...
+     g v3₁ ⋃ ... ⋃ g v3ₙₘ) =
+    (g v1₁ ⋃ ... ⋃ g v1ₙ₁) ⋃
+    (g v2₁ ⋃ ... ⋃ g v2ₙ₂) ⋃
+    (g v3₁ ⋃ ... ⋃ g v3ₙ₃) ⋃
+     ...
+    (g v3₁ ⋃ ... ⋃ g v3ₙₘ) = -- Since [Many.union] is associative
+    bind (f v1) g ⋃
+    bind (f v2) g ⋃
+    bind (f v3) g ⋃
+    ...           ⋃
+    bind (f vn) g = -- fg := fun x => bind (f x) g
+    fg v1 ⋃ fg v2 ⋃ fg v3 ... ⋃ fg vn =
+    bind {v1, v2, v3, ..., vn} fg =
+    bind v (fun x => bind (f x) g) =
+-/
 
 #check LawfulMonad
+
+instance : Monad Many where
+  pure := Many.one
+  bind := Many.bind
+
+/- This monad is *really* powerful. With it, we can create an example
+   search that finds all the combinations of numbers in a list
+   that add to 15. -/
+
+-- 1:15 h - peeked a lot :( but at least I got the intuition right
+def addsTo (goal : Nat) : List Nat → Many (List Nat)
+  | [] =>
+    if goal == 0 then
+      pure []
+    else
+      Many.none
+  | x :: xs =>
+    if x > goal then
+      addsTo goal xs
+    else
+      (addsTo goal xs).union
+        (addsTo (goal - x) xs >>= fun sum =>
+         pure (x :: sum))
+
+/- THIS IS NOT EQUIVALENT AT ALL!
+    (addsTo goal xs).union $
+    if x > goal then
+      addsTo (goal - x) xs >>= fun sum =>
+      pure (x :: sum)
+    else
+      Many.none -- [x] won't be included in any sum
+-/
+
+-- [addsTo (goal - x) xs] is all the sublists whose sum is [goal - x]
+#check addsTo
+#eval (addsTo 15 [1,2,3,4,5]).takeAll
+#eval (addsTo 15 [1,2,3,4,5,10]).takeAll
+#eval (addsTo 15 [1,2,3,4,5,10,0]).takeAll
+#eval (addsTo 15 [0,1,2,3,4,5,10]).takeAll
+#eval (addsTo 15 [0,0,1,2,3,4,5,10]).takeAll
+#eval (addsTo 15 [0,0,0,1,2,3,4,5,10]).takeAll
+#eval (addsTo 15 [0,0,0,0,0,0,0,0,1,2,3,4,5,10]).takeAll -- It's fast!
+-- #eval Many.take 10 <| addsTo 15 <| (List.replicate 100 0).append [1,2,3,4,5] -- Stack overflow
+#eval (addsTo 15 []).takeAll
+#eval (addsTo 15 [1,2,3,4]).takeAll
+#eval (addsTo 15 [3,9,15]).takeAll
+
+
+end NonDeterministic
+
+-- Without effects, calculators would be useless
+
+end ArithExpr
