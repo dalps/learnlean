@@ -808,7 +808,7 @@ def applyEmpty [Monad m] (op : Empty) (_ : Int) (_ : Int) : m Int :=
 
 open Expr Prim
 #eval evaluateM (m := Id) applyEmpty (prim plus (const 5) (const (-14)))
-#eval evaluateM (m := Id) applyEmpty (prim (other CanFail.div) (const 5) (const (-14)))
+#eval evaluateM (m := Id) applyEmpty (prim (other CanFail.div) (const 5) (const (-14))) -- [div] has effects
 #eval evaluateM divExcept (prim (other CanFail.div) (const 5) (const (-14)))
 #eval evaluateM divOption (prim (other CanFail.div) (const 42) (const (-14)))
 end Special
@@ -959,8 +959,183 @@ def addsTo (goal : Nat) : List Nat → Many (List Nat)
 #eval (addsTo 15 [1,2,3,4]).takeAll
 #eval (addsTo 15 [3,9,15]).takeAll
 
+inductive NeedsSearch
+  | div
+  | choose
 
+def applySearch : NeedsSearch → Int → Int → Many Int
+  | NeedsSearch.choose, x, y =>
+    Many.fromList [x, y]
+  | NeedsSearch.div, x, y =>
+    if y == 0 then
+      Many.none
+    else Many.one (x / y)
+
+/- [evaluateM] and [applyPrim] are parameterized over a monad,
+   [Many] is a monad instance. Non deterministic evaluation is
+   possible with minimal code!
+-/
+open Special.Prim Expr NeedsSearch
+
+-- 1 + choose(2,5)
+#eval Many.takeAll <| Special.evaluateM applySearch
+  (prim Special.Prim.plus
+    (const 1)
+    (prim (other choose) (const 2) (const 5)))
+
+-- 1 + 2/0
+#eval Many.takeAll <| Special.evaluateM applySearch
+  (prim Special.Prim.plus
+    (const 1)
+    (prim (other div) (const 2) (const 0)))
+
+-- 90 / (choose(-5,5) + 5)
+#eval Many.takeAll <| Special.evaluateM applySearch
+  (prim (other div)
+    (const 90)
+    (prim plus
+      (prim (other choose) (const (-5)) (const 5))
+      (const 5)))
 end NonDeterministic
+
+-- # Custom environments
+namespace Env
+
+-- A new monad, representing environments of functions and operators.
+def Reader (ρ : Type) (α : Type) : Type := ρ → α -- [ρ] stands for environments, [α] is pretty much anything, such as an environment
+
+def read : Reader ρ ρ := fun env => env
+
+/- [ρ] could be seen as a collection of function names, while [α] as their
+   implementations. The mapping from function names to their implementations
+   is called an _environment_.
+
+   The simplest environment is the one that when queried a constant, it
+   returns the constant function. -/
+def Reader.pure (x : α) : Reader ρ α := fun _ => x
+
+/- Don't do this:
+def Reader.bind : Reader ρ α → (α → Reader ρ β) → Reader ρ β :=
+  You won't get Lean's Infoview help, because you didn't label
+  your things. Also, remember to expand definitions, as in this case.
+
+  When you're done, undo the expansion and clean the details.
+
+def Reader.bind {ρ : Type} {α : Type} {β : Type}
+  (result : ρ → α) (next : α → ρ → β) : ρ → β :=
+  fun env => next (result env) env
+-/
+def Reader.bind (result : Reader ρ α) (next : α → Reader ρ β) : Reader ρ β :=
+  -- Queries the [result] environment, does something with the result to form a new environment
+  fun env => next (result env) env
+
+/- [Reader.pure] and [Reader.bind] obey the monad contract.
+
+    1.
+    bind (pure v) f
+    ==>
+    fun env => f ((fun _ => v) env) env
+    ==>
+    fun env => f v env
+    ==> -- Forall [g], [g = fun x => g x]. Here, take [g] as [f v], which can be applied to [env].
+    f v
+
+    2.
+    bind r pure = r
+    ==>
+    fun env => pure (r env) env
+    ==>
+    fun env => (fun _ => (r env)) env
+    ==>
+    fun env => r env
+    ==>
+    r
+
+    3.
+    bind r (fun y => bind (f y) g)
+    ==>
+    fun env => (fun y => bind (f y) g) (r env) env
+    ==>
+    fun env => (bind (f (r env)) g) env
+    ==>
+    fun env => (fun env' => g (f (r env) env') env') env
+    ==>
+    fun env => g (f (r env) env) env
+    =
+    bind (bind r f) g
+    ==>
+    fun env => g ((bind r f) env) env
+    ==>
+    fun env => g ((fun env' => f (r env') env') env) env
+    ==>
+    fun env => g (f (r env) env) env
+
+ -- Bad attempt
+    fun env => bind (f r) g env
+    ==>
+    fun env => (fun env' => g (f r) env') env
+    ==>
+    fun env' => g (f r) env'
+    ==>
+    g (f r) -- Ill-typed! You rewrote wrongly
+-/
+
+instance : Monad (Reader ρ) where
+  pure x := fun _ => x
+  bind x f := fun env => f (x env) env
+
+abbrev Env : Type := List (String × (Int → Int → Int))
+
+def exampleEnv : Env := [("mod", (· % ·)), ("max", max)]
+
+#eval exampleEnv.lookup "mod" >>= fun f => f 5 2 |> pure
+
+def applyPrimReader (op : String) (x : Int) (y : Int) : Reader Env Int :=
+  read >>= fun env =>
+  match env.lookup op with
+  | none => pure 0 -- In *any* environment, the result is [0]
+  | some f => pure (f x y) -- In *any* environment, the result is [f x y]
+
+/- Terrible:
+    fun env =>
+    let opt := env.lookup op >>= fun f => pure (f x y)
+    match opt with
+    | none => 0
+    | some result => result
+ -/
+open Special.Prim
+#eval Special.evaluateM applyPrimReader
+  (prim (other "mod")
+    (const 42)
+    (prim (other "max")
+      (const 3)
+      (const 22))) exampleEnv
+
+#eval Special.evaluateM applyPrimReader
+  (prim (other "mix")
+    (const 1)
+    (const 2)) exampleEnv
+/-
+  For the expression [prim (other "max") (const 1) (const 2)]
+
+  bind (evalM applySp e1) (fun v1 => ...)
+  ==>
+  fun env => (fun v1 => ...) ((evalM applySp e1) env) env
+  ==>
+  ...
+
+  [evalM applySp e1] evaluates to the reader that is always 1
+  It is applied to [env] which gives you 1 [v1 := 1].
+  Then we evaluate [e2], which will give us [v2 := 2].
+  Finally we calculate a new reader, using the values of [v1] [v2]
+  and [applyPrimReader], which reads the name "max" off of an
+  (abstract) environment. It returns the constant reader 0 if
+  the name if the lookup fails, otherwise it returns the
+  constant reader of the result of the name's implementation
+  applied to [v1] and [v2].
+-/
+
+end Env
 
 -- Without effects, calculators would be useless
 
