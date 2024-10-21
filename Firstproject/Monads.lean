@@ -103,6 +103,110 @@ def andThen (attempt : Except ε α) (next : α -> Except ε β) : Except ε β 
   | Except.error msg => Except.error msg
   | Except.ok x => next x
 
+instance : Monad (Except ε) where
+  pure := Except.ok
+  bind := andThen
+
+/- 25:56 min
+  [Except ε] obeys the monad contract
+
+  1.
+  bind (pure v) f = f v
+  ===>
+  bind (Except.ok v) f
+  ===>
+  match Except.ok v with
+  | ...
+  | Except.ok x => f x
+  ===>
+  f v
+
+  2.
+  bind v pure = v
+  ===>
+  bind v Except.ok = v
+  ===>
+  match v with
+  | Except.error msg => Except.error msg
+  | Except.ok x => Except.ok x
+
+  Clearly, both cases return the input itself.
+
+  3.
+  bind (bind v f) g = bind v (fun x => bind (f x) g)
+
+  bind (bind v f) g
+  ===>
+  match bind v f with
+  | Except.error msg => Except.error msg
+  | Except.ok z => g z
+  ===>
+  match
+    match v with
+    | Except.error msg => Except.error msg
+    | Except.ok y => f y
+  with
+  | Except.error msg => Except.error msg
+  | Except.ok z => g z
+
+  ###
+
+  bind v (fun x => bind (f x) g)
+  ===>
+  match v with
+  | Except.error msg => Except.error msg
+  | Except.ok y => (fun x => bind (f x) g) y
+  ===>
+  match v with
+  | Except.error msg => Except.error msg
+  | Except.ok y =>
+    (fun x =>
+      match f x with
+      | Except.error msg => Except.error msg
+      | Except.ok z => g z) y
+  ===>
+  match v with
+  | Except.error msg => Except.error msg
+  | Except.ok y =>
+    match f y with
+    | Except.error msg => Except.error msg
+    | Except.ok z => g z
+
+  When [v = Except.ok y], matching on [f y] in the scrutinee or when
+  [v] is inspected have the same result.
+
+  * Assume [v = Except.error msg] for some [msg]. Then it is easy to
+    see that both expression evaluate to [Except.error msg].
+
+  * Assume [v = Except.ok x] for some [x]. Then
+
+    match
+      match Except.ok x with
+      | Except.error msg => Except.error msg
+      | Except.ok y => f y
+    with
+    | Except.error msg => Except.error msg
+    | Except.ok z => g z
+    ===>
+    match f y with
+    | Except.error msg => Except.error msg
+    | Except.ok z => g z
+
+    is equal to
+
+    match Except.ok x with
+    | Except.error msg => Except.error msg
+    | Except.ok y =>
+      match f y with
+      | Except.error msg => Except.error msg
+      | Except.ok z => g z
+    ===>
+    match f y with
+    | Except.error msg => Except.error msg
+    | Except.ok z => g z.
+
+    Qed.
+-/
 infixl:55 " ~~> " => andThen
 
 def firstThird (xs : List α) : Except String (α × α) :=
@@ -344,10 +448,144 @@ def set (x : σ) : State σ Unit :=
 
 -- Sequencing of stateful operations (~10 min)
 def andThen (first : State σ α) (next : α -> State σ β) : State σ β :=
-  fun s0 =>
-    let (s1, a) : σ × α := first s0
-    let S : State σ β := next a
-    S s1
+  fun s =>
+    let (s', x) := first s
+    next x s'
+
+instance : Monad (State σ) where
+  pure := ok
+  bind := andThen
+
+/- 42:10 min
+  [State σ] obeys the monad contract:
+
+  1.
+  bind (pure v) f = f v
+
+  bind (pure v) f
+  ===>
+  bind (fun s => (s,v)) f
+  ===>
+  fun s =>
+    let (s',x) := (fun s => (s,v)) s
+    f x s'
+  ===>
+  fun s =>
+    let (s',x) := (s,v)
+    f x s'
+  ===>
+  fun s => f v s
+  ===> [∀ g, fun x => g x = g with g = f v]
+  f v
+
+  2.
+  bind v pure = v
+
+  bind v pure
+  ===>
+  bind v (fun x => fun s => (s, x))
+  ===>
+  fun s =>
+    let (s',x) := v s
+    (fun x => fun s => (s, x)) x s'
+  ===>
+  fun s =>
+    let (s',x) := v s
+    (s',x)
+  ===>
+  fun s => v s
+  ===>
+  v
+
+  3.
+  bind (bind v f) g = bind v (fun x => bind (f x) g)
+
+  bind (bind v f) g
+  ===>
+  fun s =>
+    let (s',x) := (bind v f) s
+    g x s'
+  ===>
+  fun s =>
+    let (s',x) := (fun r =>
+                      let (s',x) := v r
+                      f x s'
+                  ) s
+    g x s'
+  ===>
+  fun s =>
+    let (s',x) := let (s',x) := v s
+                  f x s'
+    g x s'
+  ===>
+  fun s =>
+    let (s',x) := f (v s).snd (v s).fst
+    g x s'
+  ===>
+  fun s =>
+    g (f (v s).snd (v s).fst).snd
+      (f (v s).snd (v s).fst).fst
+  ===>
+  Assume [v = fun s => (r,x)] for any [r], [x]:
+
+  fun s =>
+    g (f ((fun s => (r,x)) s).snd ((fun s => (r,x)) s).fst).snd
+      (f ((fun s => (r,x)) s).snd ((fun s => (r,x)) s).fst).fst
+  ===>
+  fun s =>
+    g (f (r,x).snd (r,x).fst).snd
+      (f (r,x).snd (r,x).fst).fst
+  ===>
+  fun s =>
+    g (f x r).snd (f x r).fst
+
+  ###
+
+  bind v (fun x => bind (f x) g)
+  ===>
+  fun s =>
+    let (s',x) := v s
+    (fun x => bind (f x) g) x s'
+  ===>
+  fun s =>
+    let (s',x) := v s
+    (bind (f x) g) s'
+  ===>
+  fun s =>
+    (bind (f (v s).snd) g) (v s).fst
+  ===>
+  fun s =>
+    (fun r =>
+      let (s',x) := (f (v s).snd) r
+      g x s'
+    ) (v s).fst
+  ===>
+  fun s =>
+    let (s',x) := (f (v s).snd) (v s).fst
+    g x s'
+  ===>
+  fun s =>
+    g ((f (v s).snd) (v s).fst).snd
+      ((f (v s).snd) (v s).fst).fst
+  ===>
+  Assume [v = fun s => (r,x)] for *the same* [r], [x]:
+
+  fun s =>
+    g ((f (( fun s => (r,x) ) s).snd) (( fun s => (r,x) ) s).fst).snd
+      ((f (( fun s => (r,x) ) s).snd) (( fun s => (r,x) ) s).fst).fst
+  ===>
+  fun s =>
+    g ((f (r,x).snd) (r,x).fst).snd
+      ((f (r,x).snd) (r,x).fst).fst
+  ===>
+  fun s =>
+    g ((f x) r).snd ((f x) r).fst
+  ===> Application is left-associative
+  fun s =>
+    g (f x r).snd (f x r).fst
+
+  Qed.
+-/
 
 infixl:55 " ~~> " => andThen
 
@@ -1136,6 +1374,156 @@ open Special.Prim
 -/
 
 end Env
+
+namespace ReaderWithFailure
+
+def ReaderOption (ρ : Type) (α : Type) : Type := ρ → Option α
+
+def ReaderOption.pure (x : α) : ReaderOption ρ α :=
+  fun _ => some x
+
+-- def ReaderOption.bind {α β ρ: Type} (result : ρ → Option α) (next : α → ρ → Option β) : ρ → Option β :=
+def ReaderOption.bind
+  (result : ReaderOption ρ α)
+  (next : α → ReaderOption ρ β) : ReaderOption ρ β :=
+  fun env =>
+    result env >>= fun x =>
+    next x env
+
+/- ~45 min
+  [ReaderOption ρ] satisfies the monad contract:
+
+  1.
+  bind (pure v) f = f v
+
+  bind (pure v) f
+  ===>
+  fun env => (pure v) env >>= fun x => f x env
+  ===>
+  fun env => (fun _ => some v) env >>= fun x => f x env
+  ===>
+  fun env => some v >>= fun x => f x env
+  ===> [Option.some] is a left identity of [>>=]
+  fun env => (fun x => f x env) v
+  ===>
+  fun env => f v env
+  ===>
+  f v
+
+  2.
+  bind v pure = v
+
+  bind v pure
+  ==>
+  fun env => v env >>= fun x => pure x env
+  ==>
+  fun env => v env >>= fun x => (fun y => fun _ => some y) x env
+  ==>
+  fun env => v env >>= fun x => some x
+  ==>
+  fun env => v env >>= some
+  ==> [Option.some] is a right identity of [>>=]
+  fun env => v env
+  ==>
+  v
+
+  3.
+  bind (bind v f) g = bind v (fun x => bind (f x) g)
+
+  bind (bind v f) g
+  ===>
+  fun env => (bind v f) env >>= fun b => g b env
+  ===>
+  fun env =>
+    (fun env' =>
+      v env' >>= fun a => f a env') env
+    >>= fun b =>
+    g b env
+  ===>
+  fun env =>
+    v env   >>= fun a =>
+    f a env >>= fun b =>
+    g b env
+
+  ###
+
+  bind v (fun x => bind (f x) g)
+  ===>
+  fun env => v env >>= fun a => (fun x => bind (f x) g) a env
+  ===>
+  fun env => v env >>= fun a => (bind (f a) g) env
+  ===>
+  fun env => v env >>= fun a => (
+    fun env' => (f a) env' >>= fun b => g b env'
+  ) env
+  ===>
+  fun env =>
+    v env   >>= fun a => (
+    f a env >>= fun b =>
+    g b env)
+  ===> [>>=] is associative for the [Option] monad
+  fun env =>
+    v env   >>= fun a =>
+    f a env >>= fun b =>
+    g b env
+
+  The three proofs for the [pure] and [bind] operations of [ReaderExcept ε ρ]
+  are identical, they follow from the properties of the [Except ε] monad as
+  the [ReaderOptions ρ] proofs follow from those of the [Option] monad.
+
+  Qed.
+-/
+def ReaderExcept (ε : Type) (ρ : Type) (α : Type) : Type := ρ → Except ε α
+
+def ReaderExcept.pure (x : α) : ReaderExcept ε ρ α := fun _ => Except.ok x
+
+def ReaderExcept.bind
+  (result : ReaderExcept ε ρ α)
+  (next : α → ReaderExcept ε ρ β) : ReaderExcept ε ρ β :=
+  fun env =>
+    result env >>= fun x =>
+    next x env
+
+instance : Monad (ReaderOption ρ) where
+  pure := ReaderOption.pure
+  bind := ReaderOption.bind
+
+instance : Monad (ReaderExcept ε ρ) where
+  pure := ReaderExcept.pure
+  bind := ReaderExcept.bind
+
+def ReaderOption.read : ReaderOption ρ ρ := fun s => some s
+def ReaderOption.fail : ReaderOption ρ α := fun _ => none
+
+def ReaderExcept.read : ReaderExcept ε ρ ρ := fun s => Except.ok s
+def ReaderExcept.fail (msg : String) : ReaderExcept String ρ α :=
+  fun _ => Except.error msg
+
+open Env in
+def applyPrimReaderOption (op : String) (x : Int) (y : Int) :
+  ReaderOption Env Int :=
+  ReaderOption.read >>= fun env =>
+  match env.lookup op with
+  | none => ReaderOption.fail
+  | some f => ReaderOption.pure (f x y)
+
+open Env in
+def applyPrimReaderExcept (op : String) (x : Int) (y : Int)
+  : ReaderExcept String Env Int :=
+  ReaderExcept.read >>= fun env =>
+  match env.lookup op with
+  | none => ReaderExcept.fail s!"unknown operator: {op}"
+  | some f => ReaderExcept.pure (f x y)
+
+open Special.Prim
+
+def expr : Expr (Special.Prim String) :=
+  (prim plus (const 1) (prim (other "mud") (const 42) (const 3)))
+
+#eval Special.evaluateM applyPrimReaderOption expr Env.exampleEnv
+#eval Special.evaluateM applyPrimReaderExcept expr Env.exampleEnv
+
+end ReaderWithFailure
 
 -- Without effects, calculators would be useless
 
