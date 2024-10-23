@@ -1525,6 +1525,45 @@ def expr : Expr (Special.Prim String) :=
 
 end ReaderWithFailure
 
--- Without effects, calculators would be useless
+namespace Tracing
 
+-- ~45 min
+inductive ToTrace (α : Type) : Type where
+  | trace : α → ToTrace α
+
+instance : Monad (Logging.WithLog logged) where
+  pure := Logging.ok
+  bind := Logging.andThen
+
+open Special Logging in
+def applyTraced (op : ToTrace (Prim Empty)) (x : Int) (y : Int) : WithLog (Prim Empty × Int × Int) Int :=
+  match op with
+  | ToTrace.trace op =>
+    save (op, x, y) >>= fun () =>
+    Special.applyPrim applyEmpty op x y
+    /- I knew I could do without this!
+    match op with
+    | Prim.plus => ok (x + y)
+    | Prim.minus => ok (x - y)
+    | Prim.times => ok (x * y) -/
+
+deriving instance Repr for Logging.WithLog
+deriving instance Repr for Empty
+deriving instance Repr for Special.Prim
+
+open Special.Prim ToTrace
+#eval Special.evaluateM applyTraced (
+  prim (other (trace times))
+    (prim (other (trace plus)) (const 1) (const 2))
+    (prim (other (trace minus)) (const 3) (const 4))
+  : Expr (Special.Prim (ToTrace (Special.Prim Empty))))
+
+#eval Special.evaluateM applyTraced (
+  prim (other (trace times))
+    (prim plus (const 1) (const 2))
+    (prim minus (const 3) (const 4)))
+
+end Tracing
+
+-- Without effects, calculators would be useless
 end ArithExpr
