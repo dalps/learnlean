@@ -1,3 +1,5 @@
+import Firstproject.NonEmptyList
+
 #check LawfulApplicative
 
 structure MythicalCreature where
@@ -280,3 +282,186 @@ instance : Applicative List where
 #eval [(· + 3), (· * 2), (-·)] <*> [3,3,-6]
 #eval [(· + 3), (· * 2), (-·)] <*> [1000,100,10,1,-1,-10,-100,-1000]
 #eval [(· + 3), (· * 2), (-·)] <*> [1000,100,10,1,-1,-10,-100,-1000] |> List.length
+
+-- # The Validate applicative functor
+
+/- Let's combine the [Expect ε] monad with the [WithLog logged] monad
+  to validate user input. This combination won't be a new monad though,
+  rather an applicative functor.
+
+  Much like [Except], [Validate] allows to characterize whether the collected data is valid or not. Unlike [Except] it allows to keep track of _multiple errors_ that may be present in the data, gathered
+  in a list in a similar function to [WithLog].
+-/
+
+structure RawInput where
+  name : String
+  birthYear : String
+
+/- A [Subtype] is a [Type] equipped with a predicate over its values.
+   It characterizes the values of [α] that satisfy [p], therefore a
+   _subset_ of [α]. The subtype enjoys the property [p], one could say.
+-/
+structure Subtype' {α : Type} (p : α → Prop) where
+  val : α
+  property : p val
+
+/- Lean has special notation - reminiscent of Coq's - for subtypes.
+
+  For example, one can define a subtype of [Nat] that rules
+  out zero. We already did encoded positive numbers with [PosNat], but the advantage of this method is in the special treatment of the [Nat] and [Int] types. Lean implements these primitive types with heavy optimizations, something that user-defined inductive types don't get to enjoy.
+
+  Thus, [FastPos] is faster than [PosNat].
+-/
+def FastPos : Type := {x : Nat // x > 0}
+
+/- In order to build a [FastPos], you need to supply a structure containing a [Nat] and evidence that it is less than zero.
+-/
+example : FastPos := ⟨1, by simp⟩
+
+instance : OfNat FastPos (n + 1) where
+  ofNat := ⟨n + 1, by simp_arith⟩
+
+example : FastPos := 1
+
+def Nat.asFastPos? (n : Nat) : Option FastPos :=
+  /- You can name the assumption of an [if]'s guard.
+     It's a proposition, after all.
+     It is necessary to do so for building a [FastNat] from a [Nat].
+
+     [h] is bound to some evidence in both branches,
+     check it out in the Infoview.
+  -/
+  if h : n > 0 then
+    some ⟨n, h⟩
+  else none
+
+/- Let's implement the business logic of the validator.
+  The [CheckedInput] characterizes sanitized data. It is parameterized on the year that validation is performed, and it relies on subtypes.
+
+  The individual checks to be performed are conjucts in the subtypes' properties.
+
+  The contraints are:
+  * The name may not be empty
+  * The birth year must be numeric and non-negative
+  * The birth year must be greater than 1900 and less than or equal to the year in which validation is performed
+-/
+structure CheckedInput (thisYear : Nat) : Type where
+  name : {n : String // n ≠ ""}
+  birthYear : {n : Nat // n > 1900 /\ n ≤ thisYear}
+
+/- The input validator is an applicative functor.
+   The only difference that sets it apart from [Except] is that [Validate] is able to carry multiple failures, as documented by the [NonEmptyList] argument.
+-/
+
+inductive Validate (ε α : Type) : Type where
+  | errors : NonEmptyList ε → Validate ε α
+  | ok : α → Validate ε α
+
+-- Redefined for the sake of example
+instance : Functor (Except ε) where
+  map f
+    | .ok a => .ok $ f a
+    | .error e => .error e
+
+#eval (· + 1) <$> (.ok 2 : Except String Nat)
+
+-- First and foremost, [Validate] is a functor.
+instance : Functor (Validate ε) where
+  map f
+    | .ok a => .ok $ f a
+    | .errors errs => .errors errs
+
+#check Seq.seq
+#eval .ok (· + 1) <*> (.ok 2 : Except String Nat)
+#eval .ok (· + 1) <*> (.error "bad value" : Except String Nat)
+#eval .ok (· + 1 + ·) <*> (.error "bad value" : Except String Nat) <*> .ok 1
+/-
+  #eval
+  ((Except.ok (· + 1) <*> fun () =>
+  Except.ok 2) : Except String Nat)
+ -/
+
+#check LawfulApplicative.seq_assoc
+/- While [Functor] only transforms _successful_ values
+  of the container, [Applicative] may also operate
+  on the faulty values and behave accordingly
+with respect to them. -/
+
+-- Got it right - ~10 min
+instance : Applicative (Validate ε) where
+  pure := .ok
+  seq f x :=
+    match f with
+    | .errors errsSoFar =>
+      match x () with
+      | .errors errsNow => .errors (errsSoFar ++ errsNow)
+      | .ok _ => .errors errsSoFar
+    | .ok nextCheck =>
+       nextCheck <$> x ()
+
+def Field := String
+
+def reportError (f : Field) (msg : String) : Validate (Field × String) α :=
+  .errors [(f, msg)]
+
+/- The [Applicative] instance for [Validate] allows the checking
+  procedures to be applied independently to the fields and then composed.
+  Let's defined checking the procedures separately, and
+  sequence them later.
+-/
+def checkName (name : String) : Validate (Field × String) {n : String // n ≠ ""} :=
+  if h : name = "" then
+    reportError "name" "Required"
+  else pure ⟨name, h⟩
+
+/- Some checks makes sense only if performed on data
+  that has been filtered by previous checks.
+  [Validate.andThen] forces an order upon checks. -/
+def Validate.andThen (val : Validate ε α) (next : α → Validate ε β) : Validate ε β :=
+  match val with
+  | .errors errs => .errors errs
+  | .ok filtered => next filtered
+
+-- Is this a suitable [bind] for the [Monad] contract? Check
+
+def checkYearIsNat (year : String) : Validate (Field × String) Nat := -- Not a subtype, yet
+  match year.trim.toNat? with
+  | none => reportError "birth year" "Must be digits"
+  | some y => pure y
+
+def checkBirthYear (thisYear year : Nat) : Validate (Field × String) {x : Nat // x > 1900 /\ x <= thisYear} :=
+  if gt1900 : year > 1900 then
+    if ltThisYear : year <= thisYear then
+      pure ⟨year, And.intro gt1900 ltThisYear⟩ -- [ /\ ] combines [Prop]s, not evidences
+    else
+      reportError "birth year" s!"Must be earlier than {thisYear}"
+  else
+    reportError "birth year" "Must be born after 1900"
+
+-- Finally, we assemble our validator using [seq]:
+def checkInput (year : Nat) (input : RawInput) : Validate (Field × String) (CheckedInput year) :=
+  pure CheckedInput.mk <*>
+  checkName input.name <*>
+  (checkYearIsNat input.birthYear).andThen fun y =>
+  checkBirthYear year y
+
+/- I get it now: [<*>] feeds arguments to a function that awaits inputs,
+  with the additional power of deviating if error occurs in the argument,
+  or handling side effects in general. -/
+example : Except String Nat := Except.pure (· * · + · - ·) <*> .ok 3 <*> .ok 2 <*> .ok 1 <*> .ok 0
+
+deriving instance Repr for CheckedInput
+deriving instance Repr for Validate
+#eval checkInput 2024 $ RawInput.mk "Vladimir" "1923"
+#eval checkInput 2024 $ RawInput.mk "" "1923"
+#eval checkInput 2024 $ RawInput.mk "Vladimir" "1900"
+#eval checkInput 2024 $ RawInput.mk "Vladimir" "2029"
+#eval checkInput 2024 $ RawInput.mk "Vladimir" "syszyg"
+#eval checkInput 2024 $ RawInput.mk "" "syszyg"
+#eval checkInput 2024 $ RawInput.mk "" "1492" -- "Runs the rest of the checks in spite of errors!"
+
+/- What [Applicative] brings to the table:
+   * Keep running the program in spite of errors, because the
+     diagnostic data reveals important information nevertheless
+   * Parallel execution
+-/
