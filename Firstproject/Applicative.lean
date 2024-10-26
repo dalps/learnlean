@@ -465,3 +465,311 @@ deriving instance Repr for Validate
      diagnostic data reveals important information nevertheless
    * Parallel execution
 -/
+
+-- # The Applicative Contract
+
+#check Seq.seq
+#check LawfulApplicative
+#check Functor.map
+
+-- An applicative functor must:
+
+-- 1. Respect identity:
+#eval some id <*> some 3
+
+-- 2. Respect function composition:
+#eval some (· ∘ ·) <*>
+  some (· * 2) <*>
+  some (· + 1) <*>
+  some 3
+
+#eval some (· * 2) <*> (some (· + 1) <*> some 3)
+
+#eval some ((· * 2) ∘ (· + 1)) <*> some 3
+
+#eval some ((· == 4) ∘ (· + 1)) <*> some 3
+
+-- 3. Sequencing pure operations shouldn't produce side-effects
+#eval some (3 - ·) <*> some 3
+#eval (3 - ·) 3
+
+-- 4. The order of pure operations doesn't matter
+#eval (none : Option (Float → Float)) <*> some 3.14
+#eval some (· 3.14) <*> (none : Option (Float → Float))
+
+/- Let's show each of these for the [Applicative Option] instance:
+  For this instance, [pure] is simply [Option.some].
+  Recall the definition of [seq] for the [Option] instance:
+
+  seq f x :=
+    match f with
+    | none => none
+    | some g => g <$> x ()
+
+  In the following proofs, the application of [()] is implicit
+  for the sake of brevity.
+
+  1.
+  pure id <*> v = v
+  ===>
+  some id <*> v = v
+  ===>
+  id <$> v
+
+  If [v = none], then by definition of [<$>] for the [Option]
+  instance, [id <$> v] is also [none].
+
+  Otherwise [v = some x] for some [x], then:
+
+  id <$> some x ===> some (id x) ===> some x
+
+  Which is equal to [v].
+
+  2.
+  some (· ∘ ·) <*> u <*> v <*> w = u <*> (v <*> w)
+
+  If any of [u], [v], [w] is [none], then both sides are
+  trivially [none] by definition of [seq] and [<$>].
+
+  Assume [u = some g], [v = some f], [w = some x], for any
+  functions [f] and [g] and any value [x].
+
+  We reduce both sides separately and show that they reduce
+  to the same value.
+
+  some (· ∘ ·) <*> some g <*> some f <*> some x
+  ===>
+  (· ∘ ·) <$> some g <*> some f <*> some x
+  ===>
+  some (g ∘ ·) <*> some f <*> some x
+  ===>
+  (g ∘ ·) <$> some f <*> some x
+  ===>
+  some (g ∘ f) <*> some x
+  ===>
+  (g ∘ f) <$> some x
+  ===>
+  some ((g ∘ f) x)
+  ===>
+  some (g (f x))
+
+  some g <*> (some f <*> some x)
+  ===>
+  some g <*> (f <$> some x)
+  ===>
+  some g <*> some (f x)
+  ===>
+  g <$> some (f x)
+  ===>
+  some (g (f x))
+
+  3.
+  some f <*> some x = some (f x)
+
+  some f <*> some x
+  ===>
+  f <$> some x
+  ===>
+  some (f x)
+
+  4.
+  u <*> some y = some (· y) <*> u
+
+  If [u = none], both sides reduce to [none]:
+
+  none <*> some y ===> none
+  some (· y) <*> none ===> (· y) <$> none ===> none
+
+  If [u = some f] for any [f], then both sides reduce to [some (f y)]:
+
+  some f <*> some y ===> f <$> some y ===> some (f y)
+
+  some (· y) <*> some f ===> (· y) <$> some f
+  ===> some ((· y) f) ===> some (f y)
+
+  Qed.
+-/
+
+#check LawfulApplicative
+
+/- All Applicatives are Functors: [Functor.map] can be redefined
+   solely in terms of [Applicative.seq] and [Applicative.pure].
+-/
+
+def map [Applicative f] (g : α → β) (x : f α) : f β :=
+  pure g <*> x
+
+/- [Functor.map] fails only if [x] does.
+   This motivates the need to inspect variables when they
+   are on the left [<$>] in the above proofs.
+
+   [Functor] can be implemented from [Applicative] provided that
+   the [Applicative] contract implies (_is more powerful_) than
+   the [Functor] contract.
+
+   Recall the [Functor] contract:
+
+   1. It preserves the identity: (immediate)
+
+      id <$> x = x.
+
+      This follows directly from the first rule of [Applicative].
+
+      id <$> x = x ===> pure id <*> x ===> x
+
+   2. Mapping the composition of two functions is the same as
+      mapping them separately but in the same order:
+      (~10 min)
+
+      (h · g) <$> x = h <$> g <$> x
+
+      This follows from the second rule rule:
+      (wasted ~10 min by starting from left...)
+
+      h <$> g <$> x
+      ===>
+      pure h <*> (g <$> x)
+      ===>
+      pure h <*> (pure g <*> x)
+      =     By 2rd rule
+      pure (· ∘ ·) <*> pure h <*> pure g <*> x
+      =     By 3rd rule (x2)
+      pure (h · g) <*> x
+-/
+
+class Applicative' (f : Type → Type) extends Functor f where
+  pure : α → f α
+  seq : f (α → β) → (Unit → f α) → f β
+  map f x  := seq (pure f) (fun () => x)
+
+/- All Monads are Applicative functors: [Monad] already has
+  [pure] (actually, it inherits it from [Applicative]), and
+  [bind] suffices for defining [seq] -/
+def seq [Monad m] (mf : m (α → β)) (mx : Unit → m α) : m β := do
+  let f ← mf
+  let x ← mx ()
+  pure (f x)
+
+/- If the [Monad] contract implies the [Applicative] contract,
+   then we can use the above [seq] as a default definition of
+   the omonymous filed if [Monad] extends [Applicative].
+
+    Indeed, it does.
+
+    In the following proof, if is safe to omit [()] for brevity.
+
+    1. - ~12 min
+    pure id <*> x
+    ===>
+    pure id >>= fun g =>
+    x () >>= fun y =>
+    pure (g y)
+    ={ By the 1st rule of monads }=>
+    (fun g => x () >>= fun y => pure (g y)) id
+    ===>
+    x () >>= fun y => pure (id y)
+    ===>
+    x () >>= fun y => pure y
+    ===>
+    x () >>= pure
+    ={ By the 2nd rule }=>
+    x ()
+
+    2.
+    pure (· ∘ ·) <*> u <*> v <*> w = u <*> (v <*> w)
+
+    Proceed reducing both sides separately.
+
+    u <*> (v <*> w) -- Assume [u : m (α → β)] and [v <*> w : m α]
+    ===>
+    u >>= fun f =>
+    (v <*> w) >>= fun gy =>
+    pure (f gy)
+    ===>
+    u >>= fun f =>
+    ( v >>= fun g =>
+      w >>= fun y =>
+      pure (g y) ) >>= fun gy =>
+    pure (f gy)
+    ={ By association law, 3rd rule, ← }=>
+
+    pure (· ∘ ·) <*> u <*> v <*> w
+    ===>
+    ((pure (· ∘ ·) <*> u) <*> v) <*> w
+    ===>
+    seq (seq (seq (pure (· ∘ ·)) u) v) w
+    ===>
+    ((pure (· ∘ ·) >>= fun comp =>
+    u >>= fun f =>
+    pure (comp u)) >>= fun thenF =>
+      v >>= fun g =>
+      pure (thenF g)) >>= fun gThenF =>
+        w >>= fun x =>
+        pure (gThenF x)
+    ={ apply left identity }=>
+    ( (fun comp =>
+      u >>= fun f =>
+      pure (comp f)) (· ∘ ·) >>= fun thenF =>
+        v >>= fun g =>
+        pure (thenF g)) >>= fun gThenF =>
+          w >>= fun x =>
+          pure (gThenF x)
+    ={ simplify }=>
+    ((u >>= fun f =>
+     pure ((· ∘ ·) f)) >>= fun thenF =>
+       v >>= fun g =>
+       pure (thenF g)) >>= fun gThenF =>
+         w >>= fun x =>
+         pure (gThenF x)
+    ={ simplify }=>
+    ((u >>= fun f =>
+        pure (f ∘ ·)) >>= fun thenF =>
+       v >>= fun g =>
+      pure (thenF g)) >>= fun gThenF =>
+     w >>= fun x =>
+    pure (gThenF x)
+    ={ 1st rule }=>
+    (u >>= fun f =>
+     (fun thenF =>
+       v >>= fun g =>
+       pure (thenF g)) (f ∘ ·)) >>= fun gThenF =>
+         w >>= fun x =>
+         pure (gThenF x)
+    ={ simplify }=>
+    (u >>= fun f =>
+     (v >>= fun g =>
+       pure ((f ∘ ·) g))) >>= fun gThenF =>
+         w >>= fun x =>
+         pure (gThenF x)
+    ={ simplify }=>
+    (u >>= fun f =>
+     v >>= fun g =>
+     pure (f ∘ g)) >>= fun gThenF =>
+         w >>= fun x =>
+         pure (gThenF x)
+-/
+#check LawfulMonad
+/-
+
+
+    Rewriting → doesn't make progress
+    u >>= (fun z => (fun f =>
+    ( v >>= fun g =>
+      w >>= fun y =>
+      pure (g y) ) ) z >>= fun gy => pure (f gy))
+
+
+    Recall the association law of the monad contract:
+
+    x >>= f >>= g  =  x >>= (fun y => f y >>= g)
+
+    It doesn't matter wheter you first reduce [f >>= g] in a
+    context where [x] is taken abstract or you first reduce [x],
+    use it to compute [f] and then [g].
+-/
+
+#check (· <*> ·)
+#check LawfulMonad
+#check LawfulApplicative
+#check LawfulFunctor
+#check Seq.seq
