@@ -24,3 +24,13 @@ instance : Append (NonEmptyList α) where
 
 instance : CoeDep (List α) (a :: as) (NonEmptyList α) where
   coe := ⟨a,as⟩
+
+def NonEmptyList.toList (l : NonEmptyList α) := l.head :: l.tail
+
+instance [ToString α] : ToString (NonEmptyList α) where
+  toString x := (NonEmptyList.toList x).toString
+
+#eval NonEmptyList.mk "foo" ["bar"]
+
+-- Exercise: reimplement the API with this definition
+abbrev NonEmptyListSub (α : Type) := {l : List α // l ≠ []}

@@ -1075,3 +1075,159 @@ class Monad' (m : Type → Type) extends Applicative m where
     bind (pure f) fun g =>
     bind x        fun y =>
     pure (g y)
+
+-- # Alternatives
+
+abbrev NonEmptyString := {s : String // s ≠ ""}
+
+/- There are two alternative validations paths now:
+   Input may be valid for different reasons and
+   a correct validator should address all variants.
+
+   This is equivalent to defining multiple [CheckedInput]
+   structures to characterize distinct sets of valid input.
+-/
+inductive LegacyCheckedInput
+  | humanBefore1970 : -- You can have named parameters after :
+    (birthYear : {y : Nat // y > 999 /\ y < 1970}) → -- YoB is a number, and must be no later than 1969
+    String → -- Name not required, can be in fact empty
+    LegacyCheckedInput
+  | humanAfter1970 :
+    (birthYear : {y : Nat // y > 1970 /\ y < 10000}) →
+    NonEmptyString → -- Name required
+    LegacyCheckedInput
+  | company :
+    /- (birthYear : {s : NonEmptyString // s = "FIRM"}) → NO, input is fixed. It would be wasteful and useless to carry around
+    the string "FIRM". The constructor itself guarantees the name
+    field was filled with "FIRM" exactly, otherwise the
+    validator would have failed or produced another one. -/
+    NonEmptyString →
+    LegacyCheckedInput
+deriving Repr
+
+/- The new validator is able to recover from failures and move on
+   to the remaining cases, while preserving error messages.
+
+   To this purpose we introduce the [orElse] operator.
+
+   Notice the difference with [andThen]'s signature:
+   1. The lazy parameter: no need to look into other cases
+     (and therefore spend resources) if the current case succeeds.
+   2. Both cases have the same result type.
+   3. Branching rather than sequencing.
+
+   ~5 min
+-/
+def Validate.orElse (a : Validate ε α) (b : Unit → Validate ε α) : Validate ε α :=
+  match a with
+  | .ok a => .ok a
+  | .errors aErrs =>
+    match b () with
+    | .ok b => .ok b -- Recover from failure
+    | .errors bErrs => .errors (aErrs ++ bErrs) -- Preserve errors
+
+/-
+  Lean supports this pattern with two dedicated type classes.
+
+  The homogenous [OrElse] allows to recover from the failures
+  in the first argument by evaluating the second one, which must
+  have the same type.
+
+  class OrElse (α : Type) where
+    orElse : α → (Unit → α) → α
+
+  [OrElse.orElse] is bound to the infix operator [<|>], too.
+-/
+instance : OrElse (Validate ε α) where
+  orElse := Validate.orElse
+
+/-
+  To build a global validator for [LegacyCheckedInput], we build
+  validators for each constructor and combine then with [<|>].
+
+  The local checks of the constructor are sequenced with [<*>]
+  as we saw before.
+
+  The [company] constructor is peculiar in that it is implied by anonymous evidence that the name field of the form matches "FIRM".
+  The evidence can be anonymous because it won't be recorded: this
+  is implemented with a throwaway [Unit] and a function that
+  ignores its argument.
+-/
+def checkThat (condition : Bool) (field : Field) (msg : String) :
+  Validate (Field × String) Unit :=
+  if condition then
+    .ok ()
+  else
+    reportError field msg
+
+/- Validators for different cases may share the same logic for common fields!
+   Here we reuse the [checkName] routine. ~10 min
+-/
+def checkCompany'' (input : RawInput) : Validate (Field × String) LegacyCheckedInput :=
+  pure (fun _ => LegacyCheckedInput.company) <*>
+  checkThat (input.birthYear == "FIRM") "birth year" "Not a company" <*>
+  checkName input.name
+
+-- Without the noise
+
+#check Seq.seq
+#check SeqRight.seqRight
+
+-- Whatever you want ignore, have it _to the right_ of [*>]
+def checkCompany' (input : RawInput) : Validate (Field × String) LegacyCheckedInput :=
+  checkThat (input.birthYear == "FIRM") "birth year" "Not a company" *>
+  pure LegacyCheckedInput.company <*> checkName input.name
+
+-- [*>] is a specialization of [<*>] - ~5 min, peeked
+def seqRight [Applicative f] (a : f α) (b : Unit → f β) : f β :=
+  pure (fun _ x => x) <*> a <*> b ()
+
+/- Can be simplified further if you recall that for [Applicative]
+   [f <$> x = pure f <*> x] holds. Using [pure] with a function you want
+   to apply anyway is overkill. -/
+def checkCompany (input : RawInput) : Validate (Field × String) LegacyCheckedInput :=
+  checkThat (input.birthYear == "FIRM") "birth year" "Not a company" *>
+  .company <$> checkName input.name
+
+-- Helper to check subtype fields - ~7 min
+def checkSubtype {α : Type} (v : α) (p : α → Prop) [Decidable (p v)] (err : ε) : Validate ε {x : α // p x} :=
+  -- If you want to test a [Prop], it must be [Decidable]
+  if h : p v then
+    .ok ⟨v,h⟩
+  else
+    .errors [err]
+
+-- ~25 min (peeked)
+def checkHumanBefore1970 (input : RawInput) : Validate (Field × String) LegacyCheckedInput :=
+  (checkYearIsNat input.birthYear).andThen fun y =>
+  .humanBefore1970 <$>
+  checkSubtype y (fun y => y > 999 /\ y < 1970) ("birth year", "Born in or after 1970") <*>
+  pure input.name
+
+def checkHumanAfter1970 (input : RawInput) : Validate (Field × String) LegacyCheckedInput :=
+  (checkYearIsNat input.birthYear).andThen fun y =>
+  .humanAfter1970 <$>
+  checkSubtype y (fun y => y > 1970 /\ y < 10000) ("birth year", "Born before 1970") <*>
+  checkSubtype input.name (fun s => s ≠ "") ("name", "Required")
+
+def checkLegacyInput (input : RawInput) : Validate (Field × String) LegacyCheckedInput :=
+  checkCompany input <|>
+  checkHumanAfter1970 input <|>
+  checkHumanBefore1970 input
+
+#eval checkLegacyInput {name := "Joe", birthYear := "1972"}
+#eval checkLegacyInput {name := "", birthYear := "1972"}
+#eval checkLegacyInput {name := "Joe", birthYear := "1969"}
+#eval checkLegacyInput {name := "", birthYear := "1969"}
+#eval checkLegacyInput {name := "", birthYear := "FIRM"}
+#eval checkLegacyInput {name := "ACME", birthYear := "FIRM"}
+#eval checkLegacyInput {name := "ACME", birthYear := "999"}
+#eval checkLegacyInput {name := "", birthYear := "1970"}
+-- TODO: get [NonEmptyList.toString] to work here!
+
+-- Introducing Alternative Applicative Functors:
+instance : Alternative Option where
+  failure := none
+  orElse
+    | none, b => b ()
+    | some a, _ => .some a
