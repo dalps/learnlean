@@ -1,4 +1,5 @@
 import Firstproject.NonEmptyList
+import Firstproject.Many
 
 #check LawfulApplicative
 
@@ -1228,6 +1229,221 @@ def checkLegacyInput (input : RawInput) : Validate (Field × String) LegacyCheck
 -- Introducing Alternative Applicative Functors:
 instance : Alternative Option where
   failure := none
-  orElse
+  orElse -- Returns the first [some] available
     | none, b => b ()
     | some a, _ => .some a
+
+def Many.orElse : Many α → (Unit → Many α) → Many α
+  | .none, bs => bs ()
+  | .more a as, bs => more a (fun () => orElse (as ()) bs)
+  -- fun () => (as ()).union (bs ()) -- Should be the same thing, right?
+
+instance : Alternative Many where
+  failure := .none
+  orElse := Many.orElse
+
+/- [Alternative] allows to define interesting operations for
+   [Applicative]. An example is [guard], which fails the
+   program if a decidable proposition is false, otherwise
+   it does nothing.
+
+   Useful in monadic programs to terminate execution early,
+   much like throwing an exception.
+-/
+def guard' [Alternative f] (p : Prop) [Decidable p] : f Unit :=
+  if p then
+    pure ()
+  else failure
+
+/- For [Many], it can be used to filter out a branch of a
+   search. Recall [Many] is a [Monad], and therefore also an
+   [Applicative]. -/
+def Many.countdown : Nat → Many Nat
+  | 0 => .none
+  | n + 1 => .more n (fun () => Many.countdown n)
+
+#eval Many.countdown 3
+
+/-
+evenDivisors 12 = [6,4,2]
+evenDivisors 13 = []
+evenDivisors 14 = [2]
+evenDivisors 16 = [8,4,2]
+
+11, 10, 9, 8, 7, ..., 0
+
+~17:53 min - Errors:
+  - Doesn't include [n] itself
+  - Sequencing two guards is preferable to conjunction
+-/
+
+def evenDivisors (n : Nat) : Many Nat := do
+  let k ← Many.countdown (n + 1) -- A number in [0,n)
+  guard (k % 2 = 0)
+  guard (n % k = 0)
+  pure k
+
+#eval evenDivisors 9
+#eval evenDivisors 12
+#eval evenDivisors 18
+#eval evenDivisors 20
+#eval evenDivisors 5040
+
+namespace ImproveValidate
+
+inductive Validate (ε α : Type) : Type where
+  | errors : ε → Validate ε α
+  | ok : α → Validate ε α
+
+instance : Functor (Validate ε) where
+  map f
+  | .ok a => .ok $ f a
+  | .errors errs => .errors errs
+
+/- You can't define this outside and reuse it for both the
+   original implementation and the exercise, it breaks some
+   typing assumptions.
+-/
+def Validate.seq [Append ε] (f : Validate ε (α → β)) (x : Unit → Validate ε α) : Validate ε β :=
+  match f with
+    | .errors errsSoFar =>
+      match x () with
+      | .errors errsNow => .errors (errsSoFar ++ errsNow)
+      | .ok _ => .errors errsSoFar
+    | .ok nextCheck =>
+       nextCheck <$> x ()
+
+instance [Append ε] : Applicative (Validate ε) where
+  pure := .ok
+  seq := Validate.seq
+
+instance [Append ε] : OrElse (Validate ε α) where
+  orElse
+  | .ok a, _ => .ok a
+  | .errors errs, b =>
+    match b () with
+    | .errors moreErrs => .errors (errs ++ moreErrs)
+    | .ok b => .ok b
+-- ~20 min
+
+def Validate.mapErrors : Validate ε α → (ε → ε') → Validate ε' α
+  | .ok a, _ => .ok a
+  | .errors errs, f => .errors (f errs)
+
+/-
+  instance : Alternative (Validate ε) where
+    failure := Validate.errors -- Impossible
+-/
+deriving instance Repr for Field
+
+inductive TreeError where
+  | field : Field → String → TreeError
+  | path : String → TreeError → TreeError
+  | both : TreeError → TreeError → TreeError
+
+instance : Append TreeError where
+  append := TreeError.both
+
+def reportError (field : Field) (msg : String) : Validate TreeError α :=
+  .errors (TreeError.field field msg)
+
+/- The legacy validation system, written with [TreeError]
+   instead of [NonEmptyList] for user-friendlier reports. -/
+
+#check guard
+#check checkThat
+
+-- The equivalent of [guard]
+def checkThat (condition : Bool) (field : Field) (msg : String) : Validate TreeError Unit :=
+  if condition then
+    pure ()
+  else
+    reportError field msg
+
+def checkName (name : String) : Validate TreeError {n : String // n ≠ ""} :=
+  if h : name = "" then
+    reportError "name" "Required"
+  else
+    .ok ⟨name,h⟩
+
+def checkYearIsNat (year : String) : Validate TreeError Nat :=
+  match year.trim.toNat? with
+  | none => reportError "birth year" "Must be digits"
+  | some y => pure y
+
+def checkCompany (input : RawInput) : Validate TreeError LegacyCheckedInput :=
+  checkThat (input.birthYear == "FIRM") "birth year" "Not a company" *>
+  LegacyCheckedInput.company <$> checkName input.name
+
+def Validate.andThen (val : Validate ε α) (next : α → Validate ε β) : Validate ε β :=
+  match val with
+  | .ok filtered => next filtered
+  | .errors errs => .errors errs
+
+def checkSubtype {α : Type} (v : α) (p : α → Prop)
+  [Decidable (p v)] (err : ε) : Validate ε {x : α // p x} :=
+  if h : p v then
+    .ok ⟨v,h⟩
+  else
+    .errors err
+
+def checkHumanAfter1970 (input : RawInput) : Validate TreeError LegacyCheckedInput :=
+  (checkYearIsNat input.birthYear).andThen fun y =>
+  LegacyCheckedInput.humanAfter1970 <$>
+  checkSubtype y (fun y => y > 1970 /\  y < 10000) (.field "birth year" "Born before 1970") <*>
+  checkSubtype input.name (fun s => s ≠ "") (.field "name" "Required")
+
+def checkHumanBefore1970 (input : RawInput) : Validate TreeError LegacyCheckedInput :=
+  (checkYearIsNat input.birthYear).andThen fun y =>
+  LegacyCheckedInput.humanBefore1970 <$>
+  checkSubtype y (fun y => y > 999 /\ y < 1970) (.field "birth year" "Born in or after 1970") <*>
+  pure input.name
+
+def checkLegacyInput (input : RawInput) : Validate TreeError LegacyCheckedInput :=
+  (checkCompany input).mapErrors (.path "Company user") <|>
+  (checkHumanAfter1970 input).mapErrors (.path "Born after 1970 user") <|>
+  (checkHumanBefore1970 input).mapErrors (.path "Born before 1970 user")
+
+deriving instance ToString for Field
+
+-- ~3 min
+def report (t : TreeError) : String :=
+  let rec indent (i : Nat) (t : TreeError) : String :=
+    let space : String := List.replicate i "  " |> String.join
+    match t with
+    | .field field msg => s!"{space}❌ Problem with {field}: {msg}"
+    | .path path t =>s!"{space}{path}\n{indent (i + 1) t}"
+    | .both t1 t2 => s!"{indent i t1}\n{indent i t2}"
+  indent 0 t
+
+instance : ToString TreeError where
+  toString := report
+
+#print LegacyCheckedInput
+instance : ToString LegacyCheckedInput where
+  toString
+  | .company name => s!"{name}"
+  | .humanAfter1970 year name => s!"{year} {name}"
+  | .humanBefore1970 year name => s!"{year} {name}"
+
+instance : ToString (Validate TreeError LegacyCheckedInput) where
+  toString
+  | .ok valid => s!"{valid}"
+  | .errors errs => s!"There were some errors:\n{errs}"
+
+deriving instance Repr for TreeError
+-- deriving instance Repr for Validate
+
+#eval checkLegacyInput {name := "Joe", birthYear := "1972"}
+def t1 := checkLegacyInput {name := "", birthYear := "1972"}
+#eval t1
+#eval checkLegacyInput {name := "Joe", birthYear := "1969"}
+#eval checkLegacyInput {name := "", birthYear := "1969"}
+#eval checkLegacyInput {name := "", birthYear := "FIRM"}
+#eval checkLegacyInput {name := "ACME", birthYear := "FIRM"}
+def t2 := checkLegacyInput {name := "ACME", birthYear := "999"}
+#eval t2
+#eval checkLegacyInput {name := "", birthYear := "1970"}
+
+-- 53:57 min + 59:37 min 🐌
+end ImproveValidate
