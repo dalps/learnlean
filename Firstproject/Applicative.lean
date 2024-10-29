@@ -1445,5 +1445,245 @@ def t2 := checkLegacyInput {name := "ACME", birthYear := "999"}
 #eval t2
 #eval checkLegacyInput {name := "", birthYear := "1970"}
 
--- 53:57 min + 59:37 min 🐌
+-- 53:57 min + 17:45 min + 59:37 min 🐌
 end ImproveValidate
+
+-- # Universes
+
+#check Type
+#check Prop
+
+/- Having sets to be constructed by arbitrary properties
+  allows weird membership relations and leads to Russel's
+  paradox.
+
+  Due to a similar paradox of dependent type theory,
+  [Type] cannot itself be a member [Type]: [Type : Type]
+  leads to logical inconsistencies.
+
+  Therefore, another distinct type must was devised to
+  accomodate [Type], and another, more general type to
+  accomodate the type that accomodates [Type], etc.
+
+  The container of [Type] is called [Type 1].
+-/
+#check Type
+
+-- And the container of [Type 1] is [Type 2] and so on
+#check Type 1
+#check Type 2
+#check Type 3
+
+/-
+  Note that your checking the type of types (cool, huh?).
+
+  The proper terminology for these higher-kinded types is
+  _universes_. The very first universe is [Type], which can
+  also be read as [Type 0], but the [0] is omitted for brevity.
+
+  Arrow types occupy the smallest universe that can
+  accomodate both the argument type and the return type,
+  so the maximum of the two universes plus one:
+-/
+#check Type 0
+#check Nat → Nat
+#check Nat → Type 1
+#check Type → Type
+#check Type 1 → Type 1
+#check Type 1 → Type 2
+#check Type 4 → Type 2
+#check Prop → Prop
+#check Prop → Type
+#check Type → Prop
+
+/- If the return type is _a_ [Prop], then the whole function
+   type lives in [Prop], even if an argument type lives in
+   a larger universe, such as [Type], [Type 1] etc. -/
+#check (n : Nat) → n = n + 0
+#check Nat
+#check (α β : Type) → α = β -- Not [Type 1]!
+#check Type 2 → 2 + 2 = 5 -- Not [Type 3]!
+
+inductive MyList (α : Type) : Type where
+  | nil : MyList α
+  | cons : α → MyList α → MyList α
+
+#check MyList -- a function from [Type] to [Type].
+/- An implication of the type of [MyList] is that it
+  cannot be used to create a list of types.
+
+  This is because it expects argument of type [Type], such
+  as [Nat], [MyList Nat], [Unit] etc.
+  To see why, the argument [Type] has [Type 1], which is larger than the expected argument type [Type] and leads
+  to a type mismatch error:
+-/
+def myListOfTypes : MyList Type := -- Error
+  .cons Nat (.cons String (.nil))
+
+def myListofLists : MyList (MyList Nat) :=
+  .cons .nil (.cons (.cons 1 .nil) .nil) -- [[],[1]]
+
+#check Type 1 → Type
+/-
+  If we want list of types, we must lift the whole
+  funtion type to one universe above.
+
+  Both the argument and return type must be lifted.
+
+  inductive MyTypeList (α : Type 1) : Type where
+  | nil : MyTypeList α
+  | cons : α → MyTypeList α → MyTypeList α
+
+  The argument with type [α] is in a larger universe than [MyTypeList α] itself, and Lean rejects this definition.
+
+  We solve this by increasing by one the level of the return
+  type aswell.
+-/
+inductive MyTypeList (α : Type 1) : Type 1 where
+  | nil : MyTypeList α
+  | cons : α → MyTypeList α → MyTypeList α
+
+#check MyTypeList.cons
+def myListOfTypes' : MyTypeList Type :=
+  .cons Nat (.cons String (.cons Unit .nil))
+
+def myListOfLists : MyTypeList (MyTypeList Type) :=
+  .cons .nil (.cons (.cons Nat .nil) .nil) -- [[], [Nat]]
+
+/- But now we've rendered [MyTypeList] impossible to use
+  in contexts that expect a [Type]. -/
+#check MyTypeList Nat
+#check MyTypeList.cons 1 .nil -- Hangs up with a metavariable
+#check MyTypeList.cons 1 (MyTypeList.cons 2 .nil)
+
+-- Defining a datatype in a _fixed_ universe can lead to code duplication.
+
+-- # Universe Polymorphism
+#check List -- Lean's [List] can accomodate [Type]s and higher classes thanks to the universe parameter [u]
+
+/- It uses a feature called _universe polymorphism_ that works
+  at a higher plain than ordinary polimorphism.
+
+  Similarly to how ordinary polymorphism allows your definitions to contain type types variables (but the level is fixed),
+  universe polymorphism allows variables to stand for universes
+  in a definition.
+
+  While we range over type variables with greek letters,
+  we range over universe variables with latin letters [u], [v] and [w]. You can introduce a universe variable to stand for
+  "any level". -/
+
+inductive MyListU (α : Type u) : Type u where
+  | nil : MyListU α
+  | cons : α → MyListU α → MyListU α
+
+/- [MyListU] can be used to contain actual natural numbers
+  (level 0) and the type of natural numbers (level 1).
+  In two separate definition, of course. The two types cannot be
+  mixed in the same list. -/
+example : MyListU Nat := .cons 1 .nil
+example : MyListU Type := .cons Nat .nil
+-- It can even contain itself (level 1)!
+example : MyListU (Type → Type) :=
+  .cons MyListU (
+    .cons (fun t => MyListU (t → Nat)) (
+      .cons id .nil
+    ))
+
+/- Notice that [MyListU] implicitly takes a universe level
+  argument. It is annotated as follows in its type:
+
+  MyListU.{u} (α : Type u) : Type u
+
+  Lean infers this argument behind the scenes whenver you apply
+  [MyListU], but you can also provide them manually.
+-/
+
+example : MyListU.{0} Nat := .cons 1 (.cons 0 .nil)
+
+example : MyListU.{1} Type := .cons Nat (.cons Unit .nil)
+
+example : MyListU.{1} (Type → Type) :=
+  .cons MyListU.{0} (
+    .cons (fun t => MyListU.{0} (t → Nat)) (
+      .cons id .nil
+    )) -- Turns out it wasn't actually referring to itself, but to a lower kinded version of itself. This dodges the pardoxes caused by cyclic and self-referential types
+
+-- [MyListU.{u}] cannot contain itself, for any [u]:
+example : MyListU.{u} (Type u → Type u) :=
+  .nil -- ❌
+
+example : MyListU.{u+1} (Type u → Type u) :=
+  .cons MyListU.{u+1} .nil -- ❌
+
+example : MyListU.{u+1} (Type u → Type u) := -- ✔️
+  .cons MyListU.{u} .nil
+
+#check List Type
+#check List (List Type)
+
+#check [Nat, String, Unit, Prop] -- [: List Type]
+
+/- [Type] isn't the only inhabitant of [Type 1]!
+  There are many arrow types to keep her company. -/
+#check [Type, Type, Nat → Type, Type → Type → Type] -- [: List (Type 1)]
+
+-- Do not confuse list of lists _of_ types with list of list types. Nested lists don't increase the universe level.
+#check [List Type, List (List Type)]
+#check [[String], [Nat, Unit]]
+#check [List Nat, [Nat]] -- Error
+
+-- ## Multiple universes
+
+inductive MySum (α : Type u) (β : Type u) : Type u where
+  | inl : α → MySum α β
+  | inr : β → MySum α β
+
+example : MySum Nat Unit := MySum.inr ()
+example : MySum Nat Prop := MySum.inr (2 + 2 = 4)
+example : MySum Type Type := MySum.inr Nat
+example : MySum (Type → Type) Type := MySum.inl MyList
+
+/- Loosening the universe constraint allows to sum together types
+  from different universes -/
+inductive MySum' (α : Type u) (β : Type v) : Type (max u v) where
+  | inl : α → MySum' α β
+  | inr : β → MySum' α β
+
+example : MySum' Nat Type := .inl 1
+example : MySum' Nat Type := .inr Nat
+
+-- ## Prop
+
+/- [Prop] is at the bottom of the universe hierarchy: it lives
+   inside [Type 0] together with [Nat], [String], [List Nat] and so on. It classifies logical propositions
+
+   However an important difference makes it stand out among its
+   datatype siblings:
+   - Its values are still _types_: [p : Prop] classifies what
+     counts as convincing evidence of the proposition [p].
+     In contrast, the values of its sibling [Nat] are just
+     atomic numbers.
+   - All evidences of a proposition type are equipotent, meaning
+     it doesn't matter which particular value is used, what
+     matters it that it exists and can be constructed.
+     Clearly this is not the case for datatypes like [Nat]:
+     a program of type [Nat] should be concerned about what
+     [Nat] it returns.
+-/
+#check Prop
+example : List.{0} Prop := [
+  2 + 2 = 4,
+  "Geronimo" ++ "Stilton" = "Geronimo Stilton"
+]
+
+/- [Prop] and [Type] are united in a single hierarchy called[Sort].
+  Like [Type] it can take a universe level argument, where [0] stands
+  for [Prop] and [u + 1] stands for [Type u]. So:
+
+  Sort 0        := Prop
+  Sort (u + 1)  := Type u
+-/
+#check Sort 1
+#check CoeSort
+
+-- [CoeSort] allows to write [Sort 2] in place of [Type 1]
