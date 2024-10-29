@@ -1652,6 +1652,21 @@ inductive MySum' (α : Type u) (β : Type v) : Type (max u v) where
 example : MySum' Nat Type := .inl 1
 example : MySum' Nat Type := .inr Nat
 
+/- I want to stress that functions among the type variables do not
+  need a larger universe. -/
+inductive MyWeirdSum (α : Type u) (β : Type u) : Type u where
+  | inl : (α → α) → MyWeirdSum α β
+  | inr : β → MyWeirdSum α β
+
+/- But as soon as you introduce a type parameter to a constructor,
+  its level increases by one, and the whole inductive type must reflect this increase. -/
+inductive MyWeirdSum' (α : Type u) (β : Type u) : Type (u+1) where
+  | inl {γ : Type u} : γ → α → MyWeirdSum' α β
+  | inr : β → MyWeirdSum' α β
+
+example : MyWeirdSum' Nat Unit := .inl "what" 1
+example : MyWeirdSum' Nat Unit := .inl (2 + 2 = 4) 1
+
 -- ## Prop
 
 /- [Prop] is at the bottom of the universe hierarchy: it lives
@@ -1687,3 +1702,151 @@ example : List.{0} Prop := [
 #check CoeSort
 
 -- [CoeSort] allows to write [Sort 2] in place of [Type 1]
+
+namespace CompleteDefinitions
+#print Function.comp
+#print Function.const
+
+-- Function.const β a := fun _ : β => a
+-- Function.const β a b := (fun _ : β => a) b
+-- Function.const := fun β a _ => a
+#eval Function.const Nat true 1
+#eval Function.const Nat true 2
+
+class Functor (f : Type u → Type v) : Type (max (u+1) v) where
+  map : {α β : Type u} → (α → β) → f α → f β
+  mapConst : {α β : Type u} → β → f α → f β :=
+    Function.comp map (Function.const _)
+
+/-
+  (I swapped the names of the type variables in book's definition of [mapConst] for consistency)
+
+  Explenation for [mapConst]:
+
+  We're composing two functions: the output type of the second
+  argument must equal the input type of the first argument.
+
+  [Function.const] has type [(β : Sort v) → (b : β) → α → β],
+  here it is applied to [_] to let Lean infer the input type
+  automatically, so [Function.const _] has type [β → α → β],
+  which is the same as [β → (α → β)]. The input type is [β] and
+  the output type is [α → β].
+
+  [map] has type [(α → β) → f α → f β]. The input type is [α → β] and its output type is [f α → f β].
+
+  The output type of [Function.const _] perfectly matches the input type of [map], hence the composition works. It defines a new function from the input type of [Function.const _] to the output type of [map], i.e. a function of type [β → f α → f β].
+
+  Its behaviour is obvious: it applies the constant function to the contents of a structure to yield a new structure whose contents are is set to the constant. Equivalent to:
+
+  fun (x : α) (y : f β) => map (fun _ => x) y
+-/
+
+#eval [1, 2, 3].map (Function.const _ true)
+#eval (Function.const _ "same") <$> [1, 2, 3]
+
+/- Now onto the analysis of the universes of [Functor]'s signature. The type of the class [Type (max (u+1) v)] imparts that the structures that implement the [Functor] type class reside in a universe that's necessarily larger than the universe [u] of the input type. To see why:
+-/
+
+/- Recall that [Type u], [Type u → Type u] or any combination of
+  arrows and [Type u] all reside in [Type (u+1)], for any [u]. -/
+#check Type
+#check Type → Type
+
+/- Here the universe level returned can't be no less than (u+1)
+  because a constructor has a type parameter at level [u].
+-/
+inductive MyBogusSum (α : Type u) (β : Type u) : Type (u+1) where
+  | inl : {γ : Type u} → γ → MyBogusSum α β
+  | inr : β → MyBogusSum α β
+
+/- To see why the output type of [Functor] must be at least [v],
+  consider another bogus type: -/
+inductive MyBogusSumUV (α : Type u) (β : Type v) : Type (max (u+1) v) where
+  | inl : {γ : Type u} → γ → MyBogusSumUV α β
+  | inr : β → MyBogusSumUV α β
+
+/- The second constructor builds values that carry a value of the
+  universe [v], and this must be taken into account by the [Sum] type be selecting the greater between [u+1] and [v].
+
+  Note that any value in the universe [v] is also in [v+1], [v+2] etc., so is also acceptable (however not recommended: your universes should be as small as possible!).
+-/
+inductive MyBogusSumUV1 (α : Type u) (β : Type v) : Type (max (u+2) (v+1)) where
+  | inl : {γ : Type u} → γ → MyBogusSumUV1 α β
+  | inr : β → MyBogusSumUV1 α β
+
+/- Other arguments of [Functor.map] have their type built by
+  applying the function [f], which lifts them to the universe [v].
+  The class's return type must take this into account requiring that it inhabits at least level [v] or above.
+
+  The same argument applies for the types inhabited by the [Applicative] and [Monad] classes.
+-/
+
+/- [SeqRight] and [SeqLeft] evaluate both of their arguments in sequence.
+  [SeqRight] ([SeqLeft]) returns the result of its second (first) argument, the first (second) are evaluated merely for their effects.
+
+  If used with a [Monad], they are equivalent to, respectively:
+
+  do let _ ← E1; E2                   (seqRight)
+  do let x ← E1; let _ ← E2; pure x   (seqLeft) - got it right!
+-/
+#print SeqRight.seqRight
+#print SeqLeft.seqLeft
+
+/- The definition of [Applicative] extends [Functor], [Pure], [Seq], [SeqRight] and [SeqLeft],
+  providing default methods for [map], [seqLeft] and [seqRight]
+  while leaving [pure] and [seq] up to the implementor.
+
+  The default implementations act both as automatically-created code and specifications for correctness. An implementor ought to override them only if she can provide a more efficient,
+  behaviorally equivalent definition.
+-/
+
+#check Function.const String id -- A function that given any string returns the identity
+#eval Function.const String id "Coq" 42 -- A function that given any string returns the identity
+
+#check (Function.const String) <$> [1, 2, 3] -- Three functions that return 1, 2, and 3 on any string input, respectively: the list is used as constants
+#check (Function.const Nat id) <$> [1, 2, 3] -- A list of three identities: the list is used as inputs
+
+/-
+  [Applicative]'s default implementations of [seqLeft] and [seqRight] are very ingeneous:
+
+  Analyzing [seqLeft]:
+
+  seqLeft  := fun a b => Seq.seq (Functor.map (Function.const _) a) b
+           := fun a b => ((fun x _ => x) <$> a) <*> b -- should've added sugar earlier to help myself
+
+  It first [maps] [Function.const _] to [a] to get a "collection" of constant functions that return [a], whatever their input is.
+  [_] is left to be inferred by Lean and will match the element type of [b].
+  Then [Seq.seq] feeds [b] to this collection of constant functions. The values of [b] are discarded by each function,
+  and the values of [a] are returned accordingly.
+  [b] is evaluated nonetheless in order to be processed.
+
+
+  This behavior agrees with the specification that it evaluates [a] then [b] only for its side effects and returns the result of [a].
+
+  Analyzing [seqRight]:
+
+  seqRight := fun a b => Seq.seq (Functor.map (Function.const _ id) a) b
+           := ((fun _ => id) <$> a) <*> b
+           := ((fun _ => fun x => x) <$> a) <*> b
+           := ((fun _ x => x) <$> a) <*> b
+
+  The subtle difference in arguments gives rise to  the opposite effect.
+  Here [id] is gets to be the return value of the constant functions and
+  the values of [a] are going to be evaluated and thrown out, with the upside
+  that its effects (if any) will occur.
+  Then the identities become the first argument to [Seq.seq], who in turn
+  feeds them [b]. [b] will be evaluated and its result returned untouched.
+-/
+
+/- Lastly, the [Monad] type class just add the [bind] operation to
+  the mix. [bind] is defined externally in the type class [Bind].
+  As a result, it extends both [Applicative] and [Bind], yielding natural implementations for [map], [seq], [seqLeft] and [seqRight] in terms of [bind].
+-/
+class Monad (m : Type u → Type v) extends Bind m, Applicative m where
+  map f m := m >>= fun x => pure (f x) -- or [m >>= pure ∘ f]
+  seq a b      := a >>= fun f => b () >>= fun x => pure (f x) -- or [a >>= fun f => f <$> b ()]
+  seqLeft  a b := a >>= fun x => b () >>= fun _ => pure x
+  seqRight a b := a >>= fun _ => b ()
+-- ~5 min
+
+end CompleteDefinitions
