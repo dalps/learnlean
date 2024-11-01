@@ -1848,5 +1848,141 @@ class Monad (m : Type u → Type v) extends Bind m, Applicative m where
   seqLeft  a b := a >>= fun x => b () >>= fun _ => pure x
   seqRight a b := a >>= fun _ => b ()
 -- ~5 min
-
 end CompleteDefinitions
+
+namespace UnderstandMonad
+
+def Option.bind (result : Option α) (next : α → Option β) : Option β :=
+  match result with
+  | .none => .none
+  | .some x => next x
+
+def Except.bind (result : Except ε α) (next : α → Except ε β) : Except ε β :=
+  match result with
+  | .error err => .error err
+  | .ok x => next x
+
+instance : Monad Option where
+  map f o := Option.bind o (fun x => f x) -- [fun x => f x] and [fun x => pure (f x)] both work: is a coercion getting in the way?
+  /-
+  Option.bind o (pure ∘ f)
+  ===>
+  Option.bind o (fun x => pure (f x))
+  ===>
+  match o with
+  | none => none
+  | some y => (fun x => pure (f x)) y
+  ===>
+  match o with
+  | none => none
+  | some y => pure (f y)
+  ===>
+  match o with
+  | none => none
+  | some y => some (f y)
+
+  That's the natural definition of [map] for [Option]. ~10 min -/
+
+  seq a b := bind a fun f => bind (b ()) fun x => pure (f x)
+  /-
+  bind a fun f => map f (b ())
+  ===>
+  match a with
+  | none => none
+  | some g => (fun f => map f (b ())) g
+  ===>
+  match a with
+  | none => none
+  | some g => map g (b ())
+
+  That's the natural definition of [seq] for [Option]. ~5 min
+  -/
+
+  seqLeft a b := bind a fun f => bind (b ()) fun _ => pure f
+  /-
+  You want to get at [seq (map (Function.const _) a) b]
+
+  match a with
+  | none => none
+  | some g => (fun f => bind (b ()) fun _ => pure f) g
+  ===>
+  match a with
+  | none => none
+  | some g => bind (b ()) fun _ => pure g
+  ===>
+  match a with
+  | none => none
+  | some g => match (b ()) with
+    | none => none
+    | some y => (fun _ => pure g) y
+  ===>
+  match a with
+  | none => none
+  | some g => match (b ()) with
+    | none => none
+    | some y => (pure ∘ (fun _ => g)) y
+  ===>
+  match a with
+  | none => none
+  | some g => map (fun _ => g) (b ())
+  ===> Doesn't match [seq] exactly
+  seq (map (fun x _ => x) a) b
+
+  ~20 min+
+
+  Wrong path:
+  seq (match a with
+       | none => none
+       | some z => (fun x y => x) z) b
+  ===>
+  seq (match a with
+       | none => none
+       | some z => fun _ => z) b
+  ===>
+  match (
+    match a with
+    | none => none
+    | some z => fun _ => z)
+  with
+  | none => none
+  | some g => g <$> b ()
+  -/
+
+  seqRight a b :=
+      match a with
+  | none => none
+  | some f => map (((fun _ y => y) ∘ id) f) (b ())
+  /-
+  match a with
+  | none => none
+  | some f => (fun _ => b ()) f
+  ===>
+  match a with
+  | none => none
+  | some _ => b ()
+  ===>
+  match a with
+  | none => none
+  | some _ => map id b ()
+  ===>
+  match a with
+  | none => none
+  | some f => map ((fun _ => id) f) (b ())
+  ={  }=>
+  match a with
+  | none => none
+  | some f => map (((fun _ y => y) ∘ id) f) (b ())
+  ===>
+  ... Find a good derivation applying composition laws of [Functor] and
+  [Applicative]. Inability to apply them indicates an brittle
+  understanding of the concepts.
+  ===>
+  seq (map (fun _ x => x) a) b
+   -/
+
+#eval ((fun _ y => y) ∘ id) 42 3
+#check LawfulFunctor
+#check LawfulApplicative
+#check LawfulMonad
+
+end UnderstandMonad
