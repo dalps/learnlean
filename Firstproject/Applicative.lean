@@ -1852,15 +1852,29 @@ end CompleteDefinitions
 
 namespace UnderstandMonad
 
+def Option.map (f : α → β) : Option α → Option β
+  | none => none
+  | some x => some (f x)
+
+def Option.seq (a : Option (α → β)) (b : Unit → Option α) : Option β :=
+  match a with
+  | none => none
+  | some f => Option.map f (b ())
+
+def Option.seqLeft (a : Option α) (b : Unit → Option β) : Option α :=
+  match a with
+  | none => none
+  | some x => Option.map (fun _ => x) (b ())
+
+def Option.seqRight (a : Option α) (b : Unit → Option β) : Option β :=
+  match a with
+  | none => none
+  | some _ => b ()
+
 def Option.bind (result : Option α) (next : α → Option β) : Option β :=
   match result with
-  | .none => .none
-  | .some x => next x
-
-def Except.bind (result : Except ε α) (next : α → Except ε β) : Except ε β :=
-  match result with
-  | .error err => .error err
-  | .ok x => next x
+  | none => none
+  | some x => next x
 
 instance : Monad Option where
   map f o := Option.bind o (fun x => f x) -- [fun x => f x] and [fun x => pure (f x)] both work: is a coercion getting in the way?
@@ -1898,9 +1912,13 @@ instance : Monad Option where
   That's the natural definition of [seq] for [Option]. ~5 min
   -/
 
-  seqLeft a b := bind a fun f => bind (b ()) fun _ => pure f
+  seqLeft a b :=
+
+  match a with
+  | none => none
+  | some g => map (pure ∘ (fun _ => g)) (b ())
   /-
-  You want to get at [seq (map (Function.const _) a) b]
+  You want to recover the definition of [Option.seqLeft] above.
 
   match a with
   | none => none
@@ -1924,34 +1942,18 @@ instance : Monad Option where
   ===>
   match a with
   | none => none
-  | some g => map (fun _ => g) (b ())
-  ===> Doesn't match [seq] exactly
-  seq (map (fun x _ => x) a) b
-
-  ~20 min+
-
-  Wrong path:
-  seq (match a with
-       | none => none
-       | some z => (fun x y => x) z) b
-  ===>
-  seq (match a with
-       | none => none
-       | some z => fun _ => z) b
-  ===>
-  match (
-    match a with
+  | some g => match (b ()) with
     | none => none
-    | some z => fun _ => z)
-  with
+    | some y => some ((fun _ => g) y)
+  ===>
+  match a with
   | none => none
-  | some g => g <$> b ()
+  | some g => map (fun _ => g) (b ())
+
+  ~20 min + finished 2 days later
   -/
 
-  seqRight a b :=
-      match a with
-  | none => none
-  | some f => map (((fun _ y => y) ∘ id) f) (b ())
+  seqRight a b := a >>= fun _ => b ()
   /-
   match a with
   | none => none
@@ -1960,29 +1962,249 @@ instance : Monad Option where
   match a with
   | none => none
   | some _ => b ()
-  ===>
+  -/
+
+def Except.map (f : α → β) : Except ε α → Except ε β
+  | .error err => .error err
+  | .ok x => .ok (f x)
+
+def Except.seq (a : Except ε (α → β)) (b : Unit → Except ε α) : Except ε β :=
   match a with
-  | none => none
-  | some _ => map id b ()
-  ===>
+  | .error errs => .error errs
+  | .ok f => Except.map f (b ())
+
+def Except.seqLeft (a : Except ε α) (b : Unit → Except ε β) : Except ε α :=
   match a with
-  | none => none
-  | some f => map ((fun _ => id) f) (b ())
-  ={  }=>
+  | .error errs => .error errs
+  | .ok x => Except.map (fun _ => x) (b ())
+
+def Except.seqRight (a : Except ε α) (b : Unit → Except ε β) : Except ε β :=
   match a with
-  | none => none
-  | some f => map (((fun _ y => y) ∘ id) f) (b ())
-  ===>
-  ... Find a good derivation applying composition laws of [Functor] and
-  [Applicative]. Inability to apply them indicates an brittle
-  understanding of the concepts.
-  ===>
-  seq (map (fun _ x => x) a) b
-   -/
+  | .error errs => .error errs
+  | .ok _ => b ()
+
+def Except.bind (result : Except ε α) (next : α → Except ε β) : Except ε β :=
+  match result with
+  | .error err => .error err
+  | .ok x => next x
+
+/-
+  Proofs are identical to Option's.
+-/
 
 #eval ((fun _ y => y) ∘ id) 42 3
 #check LawfulFunctor
 #check LawfulApplicative
 #check LawfulMonad
+
+/-
+  Exercise 2:
+  Prove the default implementations of [map] and [seq] of [Monad] satisfy the
+  [Functor] and
+  [Applicative], given [bind] satisfies the [Monad] contract.
+
+
+  map f m := m >>= pure ∘ f
+
+  1. map id x = x
+
+  map id x
+  ===>
+  x >>= pure ∘ id
+  ===>
+  x >>= (fun x => pure (id x))
+  ===>
+  x >>= fun x => pure x
+  ===>
+  x >>= pure
+  ={ pure is a right identity of bind }=>
+  x
+
+  ~5 min
+
+  2. map (h ∘ g) x = map h (map g x)
+
+  map (h ∘ g) x
+  ===>
+  x >>= pure ∘ (h ∘ g)
+  ={ function composition is associative }=>
+  x >>= pure ∘ h ∘ g
+  ===>
+  x >>= fun y => pure (h (g y))
+
+  Can't be simplified further.
+
+  map h (map g x)
+  ===>
+  map g x >>= pure ∘ h
+  ===>
+  x >>= pure ∘ g >>= pure ∘ h
+  ===>
+  x >>= (fun y => pure (g y)) >>= (fun z => pure (h z))
+  ={ associativity of bind }=>
+  x >>= fun y => pure (g y) >>= fun z => pure (h z)
+  ={ pure is a left identity of bind }=>
+  x >>= fun y => (fun z => pure (h z)) (g y)
+  ===>
+  x >>= fun y => pure (h (g y))
+
+  ~20 min
+
+
+  seq a b :=
+    a >>= fun f =>
+    b () >>= fun x =>
+    pure (f x)
+
+
+  1. pure id <*> v = v
+
+  seq (pure (fun x => x)) (fun _ => v)
+  ===>
+  pure id >>= fun f => map f ((fun _ => v) ())
+  ={ pure is a left identity of bind }=>
+  map id v
+  ===>
+  v
+
+  2. pure (· ∘ ·) <*> u <*> v <*> w = u <*> (v <*> w)
+
+  seq (seq (seq (pure (· ∘ ·)) (fun _ => u)) (fun _ => v)) (fun _ => w)
+  ===>
+  (seq (seq (pure (· ∘ ·)) (fun _ => u)) (fun _ => v)) >>= fun f => map f w
+  ===>
+  ((seq (pure (· ∘ ·)) (fun _ => u)) >>= fun g =>
+   map g v) >>= fun f =>
+  map f w
+  ===>
+  ((pure (· ∘ ·) >>= fun h =>
+    map h u) >>= fun g =>
+   map g v) >>= fun f =>
+  map f w
+  ={ pure is a left identity of bind }=>
+  ((map (· ∘ ·) u) >>= fun g =>
+   map g v) >>= fun f =>
+  map f w
+  ={ unfold map }=>
+  ((u >>= pure ∘ (· ∘ ·)) >>= fun g =>
+   v >>= pure ∘ g) >>= fun f =>
+  w >>= pure ∘ f
+  ={ unfold ∘ }=>
+  ((u >>= fun h => pure ((· ∘ ·) h)) >>= fun g =>
+   v >>= fun y => pure (g y)) >>= fun f =>
+  w >>= fun x => pure (f x)
+  ={ simplify ∘ }=>
+  ((u >>= fun h => pure (h ∘ ·)) >>= fun g =>
+   v >>= fun y => pure (g y)) >>= fun f =>
+  w >>= fun x => pure (f x)
+  ={ associativity of bind }=>
+  (u >>= fun h =>
+   v >>= fun y =>
+   pure ((h ∘ ·) y)) >>= fun f =>
+  w >>= fun x => pure (f x)
+  ={ simplify ∘ }=>
+  (u >>= fun h =>
+   v >>= fun y =>
+   pure (h ∘ y)) >>= fun f =>
+  w >>= fun x => pure (f x)
+  ={ associativity of bind }=>
+  u >>= fun h =>
+  v >>= fun y =>
+  pure (h ∘ y) >>= fun f =>
+  w >>= fun x => pure (f x)
+  ={ rename }=>
+  u >>= fun g =>
+  v >>= fun f =>
+  pure (g ∘ f) >>= fun h =>
+  w >>= fun x => pure (h x)
+  ={ pure is a left identity of bind }==>
+  u >>= fun g =>
+  v >>= fun f =>
+  w >>= fun x => pure ((g ∘ f) x)
+  ={ simplify ∘ }=>
+  u >>= fun g =>
+  v >>= fun f =>
+  w >>= fun x => pure (g (f x))
+
+
+  u <*> (v <*> w)
+  ===>
+  seq u (fun _ => seq v (fun _ => w))
+  ===>
+  u >>= fun g => map g (seq v (fun _ => w))
+  ===>
+  u >>= fun g =>
+  map g (
+   v >>= fun f =>
+   map f w)
+  ===>
+  u >>= fun g =>
+  (v >>= fun f =>
+   map f w) >>= pure ∘ g
+  ===>
+  u >>= fun g =>
+  (v >>= fun f =>
+    w >>= pure ∘ f) >>= pure ∘ g
+  ===>
+  u >>= fun g =>
+  (v >>= fun f =>
+    w >>= fun x => pure (f x)) >>= fun y => pure (g y)
+  ={ associativity of bind }==>
+  u >>= fun g =>
+  v >>= fun f =>
+  w >>= fun x =>
+  pure (f x) >>= fun y =>
+  pure (g y)
+  ={ pure is a left identity }=>
+  u >>= fun g =>
+  v >>= fun f =>
+  w >>= fun x =>
+  pure (g (f x))
+
+  ~55 min
+
+
+  3. pure f <*> pure v = pure (f v)
+
+  seq (pure f) (fun _ => pure v)
+  ===>
+  pure f >>= fun g => map g (pure v)
+  ={ left identity }=>
+  map f (pure v)
+  ===>
+  pure v >>= pure ∘ f
+  ===>
+  pure v >>= fun x => pure (f x)
+  ={ left identity }=>
+  pure (f v)
+
+  3:46 min
+
+  4. u <*> pure y = pure (· y) <*> u
+
+  seq u (fun _ => pure y)
+  ===>
+  u >>= fun f => map f (pure y)
+  ===>
+  u >>= fun f =>
+  pure y >>= fun x => pure (f x)
+  ={ left identity }=>
+  u >>= fun f => pure (f y)
+
+
+  seq (pure (fun g => g y)) (fun _ => u)
+  ===>
+  pure (fun g => g y) >>= fun f => map f u
+  ={ left identity }==>
+  map (fun g => g y) u
+  ===>
+  u >>= fun f => pure ((fun g => g y) f)
+  ===>
+  u >>= fun f => pure (f y)
+
+  7:28 min
+
+  I can finally move on!
+-/
 
 end UnderstandMonad
