@@ -1,4 +1,4 @@
--- A monad transformers are transfrormes for type transformers
+-- Monad transformers are transfrormes for type transformers
 
 /- We've already went over [ReaderT], which wraps a monad in an environment-accepting function. -/
 #check MonadWithReaderOf
@@ -263,3 +263,193 @@ instance [Monad m] : MonadLift (Except ε) (ExceptT' ε m) where
 instance [Monad m] : MonadLift m (ExceptT' ε m) where
   monadLift action := ExceptT'.mk $ .ok <$> action
   -- ExceptT'.mk do pure (.ok (← action))
+
+/- A monad that implements [MonadExcept] can thrown and recover from exception of any type: -/
+
+inductive Err where
+  | badInput : String → Err
+  | divByZero
+
+def divBackend [Monad m] [MonadExcept Err m] (n k : Int) : m Int :=
+  if k == 0 then
+    throw Err.divByZero
+  else
+    pure (n / k)
+
+def asNumber [Monad m] [MonadExcept Err m] (s : String) : m Int :=
+  match s.toInt? with
+  | none => throw $ .badInput s
+  | some n => pure n
+
+def divFrontend' [Monad m] [MonadExcept Err m] (n k : String) : m String :=
+  tryCatch (do
+    pure (toString (← divBackend (← asNumber n) (← asNumber k)))
+  ) (fun -- [fun] straight up opens a pattern match
+  | .badInput s => pure s!"\"{s}\" is not a number!"
+  | .divByZero => pure s!"Tried to divide {k} by {n}!" -- By the time this is thrown [k] and [n] are guaranteed to represent numbers
+  )
+
+def divFrontend [Monad m] [MonadExcept Err m] (n k : String) : m String :=
+  try
+    pure $ toString (← divBackend (← asNumber n) (← asNumber k))
+  catch
+  | .badInput s => pure s!"\"{s}\" is not a number!"
+  | .divByZero => pure s!"Tried to divide {n} by zero!"
+
+/- Note: an instance of [MonadExcept] for [Except] is predefined by the standard library, meaning [throw] and [try ... catch ...] are available for use within a [Except] computation without additional code! -/
+instance : MonadExcept Err (Except Err) where
+  throw e := .error e
+  tryCatch action handler :=
+    match action with
+    | .error e => handler e
+    | .ok v => .ok v
+
+deriving instance Repr for Err
+
+#check (divFrontend "9" "2" : Except Err String)
+#eval (divFrontend "9" "2" : Except Err String)
+#eval (divFrontend "foo" "2" : Except Err String)
+#eval (divFrontend "2" "0" : Except Err String)
+
+-- # State transformer
+
+def StateT' (σ : Type u) (m : Type u → Type v) (α : Type u) : Type (max u v) :=
+  σ → m (α × σ)
+
+/- A monad transformed by [StateT] is still a monad abiding by the monad contract (prove it!) -/
+instance [Monad m] : Monad (StateT σ m) where
+  pure x := fun s => pure (x, s)
+  bind result next := fun s => do
+    let (x, s') ← result s
+    next x s'
+
+/-
+  The [StateT] type class provides [get] and [set] methods implemented by means of functions.
+
+  One must be prudent when using [set]:
+-/
+namespace CountDiacritics
+
+structure LetterCounts where
+  vowels : Nat
+  consonants : Nat
+deriving Repr
+
+inductive Err where
+  | notALetter : Char → Err
+deriving Repr
+
+#eval "hello".toUpper
+
+def vowels :=
+  let lowerVowels := "aeiouy"
+  lowerVowels ++ lowerVowels.toUpper
+
+def consonants :=
+  let lowerConsonants := "bcdfghjklmnpqrstvwxz"
+  lowerConsonants ++ lowerConsonants.toUpper
+
+#eval vowels
+#eval consonants
+#check set
+
+def countLettersR (str : String) : StateT LetterCounts (Except Err) Unit :=
+  let rec loop : List Char → StateT LetterCounts (Except Err) Unit
+  | [] => pure ()
+  | c :: chars => do
+      loop chars
+      let counts ← get
+      if c ∈ vowels.data then
+        set {counts with vowels := counts.vowels + 1}
+      else if c ∈ consonants.data then
+        set {counts with consonants := counts.consonants + 1}
+      else
+        throw (.notALetter c)
+  loop str.data
+
+#eval 'è'.isAlpha
+-- The book code assumes [isAlpha] is true on diacritics, which is not the case...
+
+def countLettersL (str : String) : StateT LetterCounts (Except Err) Unit :=
+  let rec loop : List Char → StateT LetterCounts (Except Err) Unit
+  | [] => pure ()
+  | c :: chars => do
+      let counts ← get
+      if c.isAlpha then
+        if c ∈ vowels.data then
+          set {counts with vowels := counts.vowels + 1}
+        else if c ∈ consonants.data then
+          set {counts with consonants := counts.consonants + 1}
+        else
+          pure ()
+      else
+        throw (.notALetter c)
+      loop chars
+  loop str.data
+
+#eval (countLettersL "ABcdEFgh") ⟨0,0⟩
+#eval (countLettersL "ABcdE1gh") ⟨0,0⟩
+#eval (countLettersL "àBcdE1gh") ⟨0,0⟩
+#eval (countLettersR "àBcdE1gh") ⟨0,0⟩
+#eval (countLettersL "éBcdègh") ⟨0,0⟩
+-- 24:45 min (weak!) - wrong: it should *not* throw an error on diacritics!
+
+/- The state updates can be made considerably more robust by using the [modify] helper. It streamlines the process of retrieving the state with [get], updating it and setting it with [set]. -/
+
+#check modify
+
+def countLetters (str : String) : StateT LetterCounts (Except Err) Unit :=
+  let rec loop : List Char → StateT LetterCounts (Except Err) Unit
+  | [] => pure ()
+  | c :: chars => do
+      if c.isAlpha then
+        if c ∈ vowels.data then
+          modify fun st => {st with vowels := st.vowels + 1}
+        else if c ∈ consonants.data then
+          modify fun st => {st with consonants := st.consonants + 1}
+        else
+          pure ()
+      else
+        throw (.notALetter c)
+      loop chars
+  loop str.data
+
+#eval (countLettersL "ABcdEFgh") ⟨0,0⟩
+#eval (countLettersL "ABcdE1gh") ⟨0,0⟩
+#eval (countLettersL "àBcdE1gh") ⟨0,0⟩
+#eval (countLettersR "àBcdE1gh") ⟨0,0⟩
+#eval (countLettersL "éBcdègh") ⟨0,0⟩
+
+/- Note: [modify] relies on an instance of [MonadState],
+  which we never instantiated. This means that Lean
+  automatically defines such instance for monads built
+  with [StateT]! How cool is that?
+
+  The operations on states [get], [set], [modify] and [modifyGet] are methods of the [MonadState] type class.
+
+  Behind the scenes, [modify] is a specialized version of another function called [modifyGet] that accepts a function that computes both a return value and a state.
+  [modify] simply twists the return value to a vacuous [unit] in a default method definition.
+-/
+
+#check MonadState
+
+/- What if an instance of [MonadState] exists for two different types of states?
+  Lean will fail to infer the correct instance when the two are intermingled in
+  the same [do]-block.
+
+  The solution is to remove the [outParam] directive to the type of the state and let the user provide it explicitly when callding the [MonadState] methods, through a type argument. This is accomplished by the [MonadStateOf] type class, and, generally speaking, by the **Of** version of any transformer.
+
+  It turns out [MonadState] is defined in temrs of its [Of] version. All non-[Of] transformers type classes are defined in terms of their [Of] version. This means that implementing the [Of] version yields implementations of both at no additional effort.
+
+  The methods of the [Of] version all end with the article "The", hinting at the fact that they expect a type argument.
+-/
+#check MonadStateOf
+
+end CountDiacritics
+
+-- # Id
+
+/- The identity monad [Id] is also an identity for transformers.
+  Recall that [Id] is the monad with no effects at all.
+  For instance, [StateT σ Id] works just like [State σ]: by adding state effects to no effects at all, we get state effects. Easy enough.
+-/
