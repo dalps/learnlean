@@ -453,3 +453,140 @@ end CountDiacritics
   Recall that [Id] is the monad with no effects at all.
   For instance, [StateT σ Id] works just like [State σ]: by adding state effects to no effects at all, we get state effects. Easy enough.
 -/
+
+instance [Monad m] : Monad (StateT σ m) where
+  pure x := fun s => pure (x, s)
+  bind result next := fun s => do
+    let (x, s') ← result s
+    next x s'
+
+#check LawfulMonad
+/-
+  [Monad (StateT σ m)] satisfies the monad contract for any monad [m].
+
+  1. bind (pure x) f = f x - 5:16 min
+
+  bind (pure x) f
+  ={ unfold [bind] }=>
+  fun s =>
+    (pure x) s >>=M fun (v, s') =>
+    f v s'
+  ={ unfold [pure x] }=>
+  fun s =>
+    (fun r => pureM (x,r)) s >>=M fun (v, s') =>
+    f v s'
+  ={ simplify }=>
+  fun s =>
+    pureM (x,s) >>=M fun (v,s') =>
+    f v s'
+  ={ pureM is a left identity of >>=M }=>
+  fun s =>
+    f x s
+  ={ simplify }=>
+  f x
+
+
+  2. bind x pure = x - 11:34 min
+
+  bind x pure
+  ={ unfold [bind] }=>
+  fun s =>
+    x s >>=M fun (v, s') =>
+    pure v s'
+  ={ unfold [pure v] }=>
+  fun s =>
+    x s >>=M fun (v, s') =>
+    (fun r => pureM (v, r)) s'
+  ={ simplify }=>
+  fun s =>
+    x s >>=M fun (v, s') =>
+    pureM (v, s')
+  ={ simplify }=>
+  fun s =>
+    x s >>=M pureM
+  ={ [pureM] is a right identity of [>>=M] }=>
+  fun s => x s
+  ={ simplify }=>
+  x
+
+
+  3. x >>= f >>= g = x >>= (fun x => f x >>= g)
+
+  x >>= f >>= g
+  ===>
+  bind (bind x f) g
+  ={ unfold bind }=>
+  bind (fun s =>
+    x s >>=M fun (v, s') =>
+    f v s') g
+  ={ unfold bind }=>
+  fun r =>
+    (fun s =>
+      x s >>=M fun (v, s') =>
+      f v s') r >>=M fun (w, r') =>
+    g w r'
+  ={ simplify }=>
+  fun r =>
+    (x r >>=M fun (v, s')) =>
+    f v s' >>=M fun (w, r') =>
+    g w r'
+  ={ associativity of >>=M }=>
+  fun r =>
+    x r >>=M fun (v, s') =>
+    f v s' >>=M fun (w, r') =>
+    g w r'
+
+
+  x >>= (fun x => f x >>= g) - 23:08 min
+  ===>
+  bind x (fun x => bind (f x) g)
+  ={ unfold bind }=>
+  bind x (fun y =>
+    fun s =>
+      (f y) s >>=M fun (v, s') =>
+      g v s')
+  ={ unfold bind }=>
+  fun r =>
+    x r >>=M fun (w, r') =>
+    (fun y =>
+      fun s =>
+        (f y) s >>=M fun (v, s') =>
+        g v s') w r'
+  ={ simplify }=>
+  fun r =>
+    x r >>=M fun (w, r') =>
+    f w r' >>=M fun (v, s') =>
+    g v s'
+  ={ rename binders }=>
+  fun r =>
+    x r >>=M fun (v, s') =>
+    f v s' >>=M fun (w, r') =>
+    g w r'
+
+  Qed.
+
+  I am *not* doing the proof of [ExceptT], it has the same shape of [OptionT]'s.
+-/
+
+structure WithLog (logged : Type u) (α : Type v) : Type (max u v) where
+  log : List logged
+  val : α
+deriving Repr
+
+def WithLog.andThen (result : WithLog Λ α) (next : α → WithLog Λ β) : WithLog Λ β :=
+  let {log := thisOut, val := thisVal} := result
+  let {log := nextOut, val := nextVal} := next thisVal
+  {log := thisOut ++ nextOut, val := nextVal}
+
+def WithLog.ok (x : β) : WithLog α β := {log := [], val := x}
+
+def WithLog.save (data : α) : WithLog α Unit := {log := [data], val := ()}
+
+def WithLogT (logged : Type u) (m : Type u → Type v) (α : Type u) :=
+  WithLog logged (m α)
+
+instance [Monad m] : Monad (WithLogT logged m) where
+  pure x := .ok (pure x)
+  bind x f := .andThen x (fun mo =>
+    bind mo (fun result =>
+    f result))
