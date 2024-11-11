@@ -582,11 +582,50 @@ def WithLog.ok (x : β) : WithLog α β := {log := [], val := x}
 
 def WithLog.save (data : α) : WithLog α Unit := {log := [data], val := ()}
 
+/- Wrong way around - the [WithLog] should be inside the monad
+
 def WithLogT (logged : Type u) (m : Type u → Type v) (α : Type u) :=
   WithLog logged (m α)
+-/
+
+def WithLogT (logged : Type u) (m : Type u → Type v) (α : Type u) : Type v :=
+  m (WithLog logged α)
+
+-- Wasted 20 min forgetting [logged] and [α] had to be on the same level :/
+def WithLogT.mk {logged α : Type u} (x :  m (WithLog logged α)) : WithLogT logged m α := x
+
+def WithLogT.run {logged α : Type u} (x : WithLogT logged m α) : m (WithLog logged α) := x
 
 instance [Monad m] : Monad (WithLogT logged m) where
-  pure x := .ok (pure x)
-  bind x f := .andThen x (fun mo =>
-    bind mo (fun result =>
-    f result))
+  pure x := WithLogT.mk $ pure (.ok x)
+  bind x f := WithLogT.mk $ do
+    let {log := thisLog, val := thisVal} := (← x)
+    let {log := nextLog, val := nextVal} := (← f thisVal)
+    pure {log := thisLog ++ nextLog, val := nextVal}
+
+#check MonadWithReaderOf
+#check MonadExceptOf
+
+class MonadWithLog (logged : outParam (Type u)) (m : Type u → Type v) : Type (max u v) where
+  save : logged → m PUnit
+
+instance [WithLogT logged m] : MonadWithLog logged m where
+-- Trace arithmetic expression with division
+
+inductive ArithException where
+  | divisionByZero
+
+inductive Prim where
+  | add
+  | sub
+  | mul
+  | div
+
+inductive ArithExpr where
+  | const : Nat → ArithExpr
+  | prim : Prim → ArithExpr → ArithExpr → ArithExpr
+
+def eval : ArithExpr → WithLogT (Prim × Nat × Nat) (Except ArithException) Nat
+  | .const n => pure n
+  | .prim op e1 e2 => do
+    .save
